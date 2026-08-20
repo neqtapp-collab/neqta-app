@@ -1,0 +1,1 @@
+import{AppShell}from'@/components/AppShell';import{Dashboard}from'@/components/Dashboard';import{dashboardService}from'@/services/dashboard.service';export default async function Page(){const data=await dashboardService.getOverview();return <AppShell active="/dashboard"><Dashboard data={data}/></AppShell>}

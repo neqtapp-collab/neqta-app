@@ -1,0 +1,1 @@
+export interface DashboardOverviewResponse{averageMargin:number;reviewCount:number;recommendedCount:number;criticalCount:number;warningCount:number}

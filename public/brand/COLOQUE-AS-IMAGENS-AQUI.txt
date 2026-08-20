@@ -1,0 +1,20 @@
+Coloque nesta pasta exatamente estes arquivos:
+
+logo-dark.png
+Logo usada no tema escuro. Recomenda-se fundo transparente e conteúdo claro/amarelo.
+
+logo-light.png
+Logo usada no tema claro. Recomenda-se fundo transparente e conteúdo escuro.
+
+mobile-logo-dark.png
+Logo compacta usada no centro do header mobile no tema escuro.
+
+mobile-logo-light.png
+Logo compacta usada no centro do header mobile no tema claro.
+
+mascote.png
+Mascote/abelha usado no card Insight.
+
+Não altere os nomes dos arquivos. Se alterar, atualize os caminhos em:
+components/AppShell.tsx
+components/Dashboard.tsx

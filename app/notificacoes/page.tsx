@@ -1,0 +1,1 @@
+import{SectionPage}from'@/components/SectionPage';export default function Page(){return <SectionPage active="" title="Notificações" subtitle="Alertas importantes sobre custos, margens e preços."><h2>X-Bacon precisa de revisão</h2><p>A margem projetada caiu para 18,6%.</p><h2>Carne bovina aumentou 14,3%</h2><p>A mudança afeta 7 produtos cadastrados.</p></SectionPage>}

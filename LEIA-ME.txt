@@ -1,0 +1,14 @@
+NEQTA V1 — PROJETO NEXT.JS
+
+Este projeto não abre diretamente por um arquivo index.html.
+
+No Windows:
+1. Extraia todo o ZIP.
+2. Dê dois cliques em INICIAR-NEQTA.cmd.
+3. Na primeira execução, aguarde a preparação.
+4. A NEQTA abrirá no navegador.
+
+Requisito: Node.js instalado.
+
+Para uma versão que abre diretamente por index.html, use o pacote separado
+"neqta-portatil-html.zip".

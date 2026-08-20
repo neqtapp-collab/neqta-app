@@ -1,0 +1,1 @@
+import type{DashboardOverviewResponse}from '@/types/dashboard';export const dashboardMock:DashboardOverviewResponse={averageMargin:32.8,reviewCount:5,recommendedCount:3,criticalCount:3,warningCount:2};

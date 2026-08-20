@@ -1,0 +1,1 @@
+import{dashboardMock}from '@/mocks/dashboard.mock';import type{DashboardOverviewResponse}from '@/types/dashboard';export interface DashboardService{getOverview():Promise<DashboardOverviewResponse>}export const dashboardService:DashboardService={async getOverview(){return structuredClone(dashboardMock)}};
