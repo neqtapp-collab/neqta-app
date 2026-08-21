@@ -1697,3 +1697,66 @@ html.light body,.app.light{--bg-main:#f5f5f2!important;--bg:#f5f5f2!important;ba
 .settings-info-box>p{display:flex;align-items:center;min-height:20px;line-height:1.4}
 .settings-field[data-invalid="true"]>input{border-color:rgba(255,77,77,.65)}
 .settings-field>.field-error{color:var(--danger);font-size:10px;line-height:1.35}
+
+/* =========================================================
+   MENU DE PERFIL — LOGOUT INTERATIVO
+   ========================================================= */
+
+.global-profile-popover button:not(:disabled),
+.drawer-footer button:not(:disabled) {
+  cursor: pointer;
+  transition:
+    background 150ms ease,
+    color 150ms ease,
+    border-color 150ms ease,
+    opacity 150ms ease;
+}
+
+/* Logout no menu do perfil */
+.global-profile-popover button:not(:disabled) {
+  color: var(--text);
+}
+
+/* Logout no menu mobile */
+.drawer-footer button:not(:disabled) {
+  cursor: pointer;
+}
+
+/* Hover apenas em dispositivos com mouse */
+@media (hover: hover) and (pointer: fine) {
+  .global-profile-popover button:not(:disabled):hover {
+    background: rgba(255, 216, 77, 0.06);
+    color: var(--yellow);
+  }
+
+  .drawer-footer button:not(:disabled):hover {
+    background: rgba(255, 216, 77, 0.06);
+    color: var(--yellow);
+  }
+
+  .light .global-profile-popover button:not(:disabled):hover,
+  .light .drawer-footer button:not(:disabled):hover {
+    background: rgba(17, 19, 26, 0.035);
+    color: #8f6c00;
+  }
+}
+
+/* Feedback ao clicar */
+.global-profile-popover button:not(:disabled):active,
+.drawer-footer button:not(:disabled):active {
+  background: rgba(255, 216, 77, 0.1);
+}
+
+/* Acessibilidade via teclado */
+.global-profile-popover button:not(:disabled):focus-visible,
+.drawer-footer button:not(:disabled):focus-visible {
+  outline: 3px solid rgba(255, 216, 77, 0.22);
+  outline-offset: 2px;
+}
+
+/* Somente botões realmente desabilitados */
+.global-profile-popover button:disabled,
+.drawer-footer button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}

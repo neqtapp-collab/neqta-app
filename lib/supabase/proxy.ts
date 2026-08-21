@@ -32,8 +32,42 @@ export async function updateSession(request: NextRequest) {
     }
   )
 
-  // Atualiza/valida a sessão no Supabase
-  await supabase.auth.getUser()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+
+  const pathname = request.nextUrl.pathname
+
+  const isLoginPage = pathname === '/login'
+
+  const protectedRoutes = [
+    '/dashboard',
+    '/produtos',
+    '/custos',
+    '/precificacao',
+    '/promocoes',
+    '/configuracoes',
+    '/notificacoes',
+  ]
+
+  const isProtectedRoute = protectedRoutes.some(
+    (route) =>
+      pathname === route || pathname.startsWith(`${route}/`)
+  )
+
+  if (!user && isProtectedRoute) {
+    const url = request.nextUrl.clone()
+    url.pathname = '/login'
+
+    return NextResponse.redirect(url)
+  }
+
+  if (user && isLoginPage) {
+    const url = request.nextUrl.clone()
+    url.pathname = '/dashboard'
+
+    return NextResponse.redirect(url)
+  }
 
   return response
 }
