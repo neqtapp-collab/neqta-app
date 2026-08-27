@@ -1,0 +1,13 @@
+{
+  "/_not-found/page": "app/_not-found/page.js",
+  "/_global-error/page": "app/_global-error/page.js",
+  "/configuracoes/page": "app/configuracoes/page.js",
+  "/custos/page": "app/custos/page.js",
+  "/dashboard/page": "app/dashboard/page.js",
+  "/login/page": "app/login/page.js",
+  "/notificacoes/page": "app/notificacoes/page.js",
+  "/page": "app/page.js",
+  "/precificacao/page": "app/precificacao/page.js",
+  "/produtos/page": "app/produtos/page.js",
+  "/promocoes/page": "app/promocoes/page.js"
+}

@@ -9,39 +9,41 @@ import { CustomSelect } from '@/components/CustomSelect';
 import { calculateMargin, formatPercent, marginForChannel, money, multiplyMoney, parseBRL, recommendedPriceForChannel, sumMoney } from '@/lib/financial';
 import { componentCost, type Unit } from '@/lib/units';
 import { productsService } from '@/services/products.service';
+import { costService } from '@/services/costs.service';
 import { routes } from '@/config/routes';
 import { sanitizeDecimal } from '@/lib/input';
-import { defaultSettings, loadSettings } from '@/lib/settings';
-import type { Product, ProductStatus } from '@/types/product';
+import { defaultSettings, loadSettingsFromSupabase } from '@/lib/settings';
+import type { Product, ProductComponent, ProductPackaging, ProductStatus } from '@/types/product';
 import type { NeqtaSettings } from '@/types/settings';
 
 type View = 'products' | 'recipes';
 type Filter = 'all' | 'healthy' | 'warning' | 'critical' | 'review';
 type SortKey = 'name' | 'variableCost' | 'currentPrice' | 'projectedMargin';
-type ComponentLine = { id: string; name: string; type?: 'INSUMO' | 'RECEITA-BASE'; quantity: number; unit: Unit; unitCost: number };
-type PackagingLine = { id: string; name: string; quantity: number; unitCost: number };
+type ComponentLine = Omit<ProductComponent, 'unit'> & { unit: Unit };
+type PackagingLine = ProductPackaging;
 
-const componentOptions: Array<Omit<ComponentLine, 'quantity'>> = [
-  { id: 'carne-bovina', name: 'Carne bovina', type: 'INSUMO', unit: 'g' as Unit, unitCost: 37.6 },
-  { id: 'mucarela', name: 'Muçarela', type: 'INSUMO', unit: 'g' as Unit, unitCost: 42.9 },
-  { id: 'pao-brioche', name: 'Pão brioche', type: 'INSUMO', unit: 'un' as Unit, unitCost: 1.85 },
-  { id: 'molho-casa', name: 'Molho da Casa', type: 'RECEITA-BASE', unit: 'g' as Unit, unitCost: 8.2 },
-];
-const ingredientOptions = [
-  { id: 'tomate', name: 'Tomate', unit: 'g' as Unit, unitCost: 8.9 },
-  { id: 'maionese', name: 'Maionese', unit: 'g' as Unit, unitCost: 12.9 },
-  { id: 'leite', name: 'Leite', unit: 'ml' as Unit, unitCost: 5.8 },
-  { id: 'alho', name: 'Alho', unit: 'g' as Unit, unitCost: 24 },
-  { id: 'azeite', name: 'Azeite', unit: 'ml' as Unit, unitCost: 38 },
-  { id: 'ketchup', name: 'Ketchup', unit: 'g' as Unit, unitCost: 11.4 },
-  { id: 'mostarda', name: 'Mostarda', unit: 'g' as Unit, unitCost: 13.5 },
-];
+const componentOptions: Array<Omit<ComponentLine, 'quantity'>> = [];
 const packagingOptions = [
   { id: 'caixa-burger', name: 'Caixa burger', unitCost: 1.2 },
   { id: 'pote-500', name: 'Pote 500 ml', unitCost: 1.65 },
   { id: 'tampa', name: 'Tampa', unitCost: .42 },
   { id: 'papel', name: 'Papel anti-gordura', unitCost: .18 },
 ];
+
+function costItemUnit(unit: import('@/types/cost').PurchaseUnit): Unit {
+  if (unit === 'kg' || unit === 'g') return 'g';
+  if (unit === 'L' || unit === 'ml') return 'ml';
+  if (unit === 'pct') return 'pacote';
+  return unit;
+}
+
+function normalizedComponentUnitCost(
+  cost: number,
+  unit: import('@/types/cost').PurchaseUnit,
+): number {
+  if (unit === 'g' || unit === 'ml') return cost * 1000;
+  return cost;
+}
 type SalesChannel = { id: string; name: string; active: boolean; primary?: boolean; percentageFee?: number; fixedFee?: number; paymentHandledByChannel: boolean; feeConfigured: boolean };
 function currencyFromInput(value: string) { return parseBRL(value); }
 function decimalFromInput(value: string) { return sanitizeDecimal(value,3); }
@@ -53,18 +55,6 @@ const statusLabel: Record<ProductStatus, string> = { healthy: 'Saudável', warni
 export function ProductsPage({ initialProducts, initialStatus, initialView }: { initialProducts: Product[]; initialStatus?: string; initialView?: string }) {
   const initialFilter: Filter = initialStatus === 'revisar' ? 'review' : filters.some(([key]) => key === initialStatus) ? initialStatus as Filter : 'all';
   const [products, setProducts] = useState(initialProducts);
-  useEffect(() => {
-    const sync = (incoming?: Product[]) => {
-      try {
-        const stored = incoming ?? JSON.parse(localStorage.getItem('neqta-products') ?? 'null') as Product[] | null;
-        if (stored) setProducts(stored);
-      } catch {}
-    };
-    const handle = (event: Event) => sync((event as CustomEvent<Product[]>).detail);
-    sync();
-    window.addEventListener('neqta-products-updated', handle);
-    return () => window.removeEventListener('neqta-products-updated', handle);
-  }, []);
   const [view, setView] = useState<View>(initialStatus === 'revisar' ? 'products' : initialView === 'receitas-base' ? 'recipes' : 'products');
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>(initialFilter);
@@ -108,7 +98,41 @@ export function ProductsPage({ initialProducts, initialStatus, initialView }: { 
   function chooseView(next: View) { setView(next); setQuery(''); setFilter('all'); setActionFor(null); window.history.replaceState({}, '', next === 'recipes' ? `${routes.products}?view=receitas-base` : routes.products); }
   function sortBy(next: SortKey) { if (sort === next) setAscending((value) => !value); else { setSort(next); setAscending(true); } }
   async function removeProduct() { if (!deleting) return; await productsService.remove(deleting.id); setProducts((current) => current.filter((item) => item.id !== deleting.id)); setDeleting(null); setSelected(null); }
-  function duplicate(product: Product) { const copy={ ...product, id: `${product.id}-copia-${Date.now()}`, name: `${product.name} — cópia` };void productsService.save(copy);setActionFor(null); }
+  async function persistProduct(product: Product) {
+    try {
+      const saved = await productsService.save(product);
+      setProducts((current) => current.some((item) => item.id === saved.id)
+        ? current.map((item) => item.id === saved.id ? saved : item)
+        : [...current, saved]);
+      setWizard(null);
+      setPageToast('Produto salvo.');
+    } catch (error) {
+      setPageToast(error instanceof Error ? error.message : 'Não foi possível salvar o produto.');
+    }
+  }
+  async function persistRecipe(recipe: Product) {
+    try {
+      const saved = await productsService.save(recipe);
+      setProducts((current) => current.some((item) => item.id === saved.id)
+        ? current.map((item) => item.id === saved.id ? saved : item)
+        : [...current, saved]);
+      setRecipeWizard(null);
+      setPageToast('Receita-base salva.');
+    } catch (error) {
+      setPageToast(error instanceof Error ? error.message : 'Não foi possível salvar a receita-base.');
+    }
+  }
+  async function duplicate(product: Product) {
+    const copy={ ...product, id: `${product.id}-copia-${Date.now()}`, name: `${product.name} — cópia` };
+    try {
+      const saved = await productsService.save(copy);
+      setProducts((current) => [...current, saved]);
+      setPageToast('Produto duplicado.');
+    } catch (error) {
+      setPageToast(error instanceof Error ? error.message : 'Não foi possível duplicar o produto.');
+    }
+    setActionFor(null);
+  }
 
   return <div className="products-page">
     <section className="products-heading">
@@ -139,8 +163,8 @@ export function ProductsPage({ initialProducts, initialStatus, initialView }: { 
     </>}
 
     {selected && <ProductDetails product={selected} close={() => setSelected(null)} edit={() => { setWizard(selected); setSelected(null); }} remove={() => setDeleting(selected)} />}
-    {wizard && <ProductWizard product={wizard === 'new' ? null : wizard} close={() => setWizard(null)} save={(product) => { void productsService.save(product);setWizard(null);setPageToast('Produto salvo.'); }} />}
-    {recipeWizard && <RecipeWizard recipe={recipeWizard === 'new' ? null : recipeWizard} close={() => setRecipeWizard(null)} save={(recipe) => { void productsService.save(recipe);setRecipeWizard(null);setPageToast('Receita-base salva.'); }} />}
+    {wizard && <ProductWizard product={wizard === 'new' ? null : wizard} close={() => setWizard(null)} save={(product) => { void persistProduct(product); }} />}
+    {recipeWizard && <RecipeWizard recipe={recipeWizard === 'new' ? null : recipeWizard} close={() => setRecipeWizard(null)} save={persistRecipe} />}
     {importing && <ImportDrawer close={() => setImporting(false)} />}
     {deleting && <ConfirmDelete product={deleting} close={() => setDeleting(null)} confirm={removeProduct} />}
     {pageToast && <Toast message={pageToast} close={() => setPageToast('')} />}
@@ -184,17 +208,18 @@ function ProductWizard({ product, close, save }: { product: Product | null; clos
   const initialPackaging: PackagingLine = { id: '', name: '', quantity: 0, unitCost: 0 };
   const [step, setStep] = useState(1);
   const [name, setName] = useState(product?.name ?? '');
-  const [category, setCategory] = useState(product?.category ?? 'Lanches');
-  const [description, setDescription] = useState('');
+  const [category, setCategory] = useState(product?.category || 'Lanches');
+  const [description, setDescription] = useState(product?.description ?? '');
   const [price, setPrice] = useState(product?.currentPrice ?? 0);
   const [pricingSettings,setPricingSettings]=useState<NeqtaSettings>(defaultSettings);
   const target = pricingSettings.financial.targetMargin;
-  const [components, setComponents] = useState<ComponentLine[]>([]);
+  const [components, setComponents] = useState<ComponentLine[]>((product?.components ?? []) as ComponentLine[]);
   const [availableComponents, setAvailableComponents] = useState<Array<Omit<ComponentLine, 'quantity'>>>(componentOptions);
   const [component, setComponent] = useState<ComponentLine>({ ...initialComponent, quantity: 0 });
   const [creatingRecipe, setCreatingRecipe] = useState(false);
   const [editingComponent, setEditingComponent] = useState<string | null>(null);
-  const [packages, setPackages] = useState<PackagingLine[]>([]);
+  const [packages, setPackages] = useState<PackagingLine[]>(product?.packaging ?? []);
+  const [availablePackaging, setAvailablePackaging] = useState(packagingOptions);
   const [packaging, setPackaging] = useState<PackagingLine>(initialPackaging);
   const [editingPackaging, setEditingPackaging] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -202,7 +227,30 @@ function ProductWizard({ product, close, save }: { product: Product | null; clos
   const [showPayments, setShowPayments] = useState(false);
   const [toast, setToast] = useState('');
 
-  useEffect(()=>{setPricingSettings(loadSettings());const sync=(event:Event)=>setPricingSettings((event as CustomEvent<NeqtaSettings>).detail);window.addEventListener('neqta-settings-updated',sync);return()=>window.removeEventListener('neqta-settings-updated',sync)},[]);
+  useEffect(()=>{void loadSettingsFromSupabase().then(setPricingSettings);const sync=(event:Event)=>setPricingSettings((event as CustomEvent<NeqtaSettings>).detail);window.addEventListener('neqta-settings-updated',sync);return()=>window.removeEventListener('neqta-settings-updated',sync)},[]);
+
+  useEffect(() => {
+    void costService.list().then((items) => {
+      const ingredientComponents: Array<Omit<ComponentLine, 'quantity'>> = items
+        .filter((item) => item.type === 'ingredient')
+        .map((item) => ({
+          id: item.id,
+          name: item.name,
+          type: 'INSUMO',
+          unit: costItemUnit(item.purchaseUnit),
+          unitCost: normalizedComponentUnitCost(item.baseUnitCost, item.purchaseUnit),
+        }));
+      setAvailableComponents((current) => [
+        ...ingredientComponents,
+        ...current.filter((item) => item.type === 'RECEITA-BASE'),
+      ]);
+      const nextPackaging = items
+        .filter((item) => item.type === 'packaging')
+        .map((item) => ({ id: item.id, name: item.name, unitCost: item.baseUnitCost }));
+      packagingOptions.splice(0, packagingOptions.length, ...nextPackaging);
+      setAvailablePackaging(nextPackaging);
+    });
+  }, []);
 
   const componentsCost = sumMoney(components.map((item) => componentCost(item.quantity, item.unit, item.unitCost)));
   const packagingCost = sumMoney(packages.map((item) => multiplyMoney(item.quantity, item.unitCost)));
@@ -218,8 +266,9 @@ function ProductWizard({ product, close, save }: { product: Product | null; clos
   function requestClose() { if (dirty) setDiscarding(true); else close(); }
   function resetComponent() { setComponent({ ...initialComponent, quantity: 0 }); setEditingComponent(null); setError(''); }
   function selectComponent(id: string) { const option = availableComponents.find((item) => item.id === id) ?? initialComponent; setComponent({ ...option, quantity: component.quantity }); setError(''); }
-  function saveCreatedRecipe(recipe: Product) {
-    const recipeOption: Omit<ComponentLine, 'quantity'> = { id: recipe.id, name: recipe.name, type: 'RECEITA-BASE', unit: (recipe.yieldUnit as Unit) || 'kg', unitCost: recipe.unitCost ?? 0 };
+  async function saveCreatedRecipe(recipe: Product) {
+    const saved = await productsService.save(recipe);
+    const recipeOption: Omit<ComponentLine, 'quantity'> = { id: saved.id, name: saved.name, type: 'RECEITA-BASE', unit: (saved.yieldUnit as Unit) || 'kg', unitCost: saved.unitCost ?? 0 };
     setAvailableComponents((current) => [...current.filter((item) => item.id !== recipeOption.id), recipeOption]);
     setComponent({ ...recipeOption, quantity: 0 });
     setCreatingRecipe(false);
@@ -243,7 +292,7 @@ function ProductWizard({ product, close, save }: { product: Product | null; clos
   function editComponent(item: ComponentLine) { setComponent(item); setEditingComponent(item.id); setError(''); }
   function removeComponent(id: string) { setComponents((current) => current.filter((item) => item.id !== id)); if (editingComponent === id) resetComponent(); }
   function resetPackaging() { setPackaging({ ...initialPackaging, quantity: 0 }); setEditingPackaging(null); setError(''); }
-  function selectPackaging(id: string) { const option = packagingOptions.find((item) => item.id === id) ?? initialPackaging; setPackaging({ ...option, quantity: packaging.quantity }); setError(''); }
+  function selectPackaging(id: string) { const option = availablePackaging.find((item) => item.id === id) ?? initialPackaging; setPackaging({ ...option, quantity: packaging.quantity }); setError(''); }
   function addPackaging() {
     if (!packaging.id) return setError('Selecione uma embalagem.');
     if (packaging.quantity <= 0) return setError('Informe uma quantidade de embalagem maior que zero.');
@@ -263,7 +312,7 @@ function ProductWizard({ product, close, save }: { product: Product | null; clos
   function removePackaging(id: string) { setPackages((current) => current.filter((item) => item.id !== id)); if (editingPackaging === id) resetPackaging(); }
   function canContinue() { if (step === 1) return Boolean(name.trim() && category && price >= 0); if (step === 2) return components.length > 0; return true; }
   function next() { if (!canContinue()) { setError(step === 1 ? 'Informe o nome e a categoria do produto.' : 'Adicione pelo menos um componente.'); return; } setError(''); setStep((current) => Math.min(4, current + 1)); }
-  function submit() { save({ id: product?.id ?? `produto-${Date.now()}`, name: name.trim(), category, kind: 'product', variableCost: totalCost, currentPrice: price, projectedMargin: margin, targetMargin: target, recommendedPrice: primaryRecommended ?? totalCost, status: price <= 0 || margin < target - 8 ? 'critical' : margin < target ? 'warning' : 'healthy' }); }
+  function submit() { save({ id: product?.id ?? `produto-${Date.now()}`, name: name.trim(), category, description: description.trim(), components, packaging: packages, kind: 'product', variableCost: totalCost, currentPrice: price, projectedMargin: margin, targetMargin: target, recommendedPrice: primaryRecommended ?? totalCost, status: price <= 0 || margin < target - 8 ? 'critical' : margin < target ? 'warning' : 'healthy' }); }
 
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 3000); return () => window.clearTimeout(timer); }, [toast]);
   if (creatingRecipe) return <RecipeWizard recipe={null} close={() => setCreatingRecipe(false)} save={saveCreatedRecipe} />;
@@ -290,6 +339,9 @@ function ComponentPicker({ items, selected, select }: { items: Array<Omit<Compon
     onChange={select}
     ariaLabel="Ingrediente ou preparo"
     placeholder="Selecione um ingrediente ou preparo..."
+    searchable
+    searchPlaceholder="Digite o nome do ingrediente ou preparo..."
+    emptyMessage="Nenhum ingrediente ou preparo encontrado."
     options={items.map((item) => ({
       value: item.id,
       label: item.name,
@@ -305,13 +357,15 @@ function InfoTooltip({ text, label }: { text: string; label: string }) {
   return <span className="info-tooltip" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}><button type="button" aria-label={label} aria-describedby={open ? id : undefined} aria-expanded={open} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onClick={() => setOpen((value) => !value)}><Info /></button>{open && <span className="info-tooltip-popover" id={id} role="tooltip">{text}</span>}</span>;
 }
 
-function RecipeWizard({ recipe, close: finishClose, save }: { recipe: Product | null; close: () => void; save: (recipe: Product) => void }) {
+function RecipeWizard({ recipe, close: finishClose, save }: { recipe: Product | null; close: () => void; save: (recipe: Product) => void | Promise<void> }) {
   const [name, setName] = useState(recipe?.name ?? '');
   const [yieldQuantity, setYieldQuantity] = useState(recipe?.yieldQuantity ?? 0);
   const [yieldUnit, setYieldUnit] = useState(recipe?.yieldUnit ?? 'kg');
   const emptyIngredient: ComponentLine = { id: '', name: '', quantity: 0, unit: 'g', unitCost: 0 };
   const [draft, setDraft] = useState<ComponentLine>(emptyIngredient);
-  const [ingredients, setIngredients] = useState<ComponentLine[]>([]);
+  const [ingredients, setIngredients] = useState<ComponentLine[]>((recipe?.components ?? []) as ComponentLine[]);
+  const [availableIngredients, setAvailableIngredients] = useState<Array<Omit<ComponentLine, 'quantity'>>>([]);
+  const ingredientOptions = availableIngredients;
   const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [recipeToast, setRecipeToast] = useState('');
@@ -319,10 +373,16 @@ function RecipeWizard({ recipe, close: finishClose, save }: { recipe: Product | 
   const total = ingredients.reduce((sum, item) => sum + componentCost(item.quantity, item.unit, item.unitCost), 0);
   const unitCost = yieldQuantity > 0 && ingredients.length ? total / yieldQuantity : 0;
   const valid = Boolean(name.trim() && yieldQuantity > 0 && yieldUnit && ingredients.length);
-  function chooseIngredient(id: string) { const option = ingredientOptions.find((item) => item.id === id) ?? emptyIngredient; setDraft({ ...option, quantity: draft.quantity }); setError(''); }
+  useEffect(() => {
+    void costService.list().then((items) => setAvailableIngredients(items
+      .filter((item) => item.type === 'ingredient')
+      .map((item) => ({ id: item.id, name: item.name, type: 'INSUMO', unit: costItemUnit(item.purchaseUnit), unitCost: normalizedComponentUnitCost(item.baseUnitCost, item.purchaseUnit) }))))
+      .catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Não foi possível carregar os ingredientes.'));
+  }, []);
+  function chooseIngredient(id: string) { const option = availableIngredients.find((item) => item.id === id) ?? emptyIngredient; setDraft({ ...option, quantity: draft.quantity }); setError(''); }
   function resetDraft() { setDraft(emptyIngredient); setEditing(null); setError(''); }
   function addIngredient() { if (!draft.id) return setError('Selecione um ingrediente.'); if (draft.quantity <= 0) return setError('Informe quanto deste ingrediente você usa.'); if (!editing && ingredients.some((item) => item.id === draft.id && item.unit === draft.unit)) return setError('Este ingrediente já está na receita. Edite a quantidade existente ou cancele.'); const wasEditing = Boolean(editing); setIngredients((current) => editing ? current.map((item) => item.id === editing ? draft : item) : [...current, draft]); resetDraft(); setRecipeToast(wasEditing ? 'Ingrediente atualizado.' : 'Ingrediente adicionado.'); }
-  function submit() { if (!valid) return; save({ id: recipe?.id ?? `receita-${Date.now()}`, name: name.trim(), category: 'Receitas-base', variableCost: total, currentPrice: 0, projectedMargin: 0, targetMargin: 0, recommendedPrice: 0, status: 'recipe', kind: 'product', yield: `${yieldQuantity} ${yieldUnit} · ${money(unitCost)}/${yieldUnit}`, yieldQuantity, yieldUnit, unitCost, componentCount: ingredients.length }); }
+  async function submit() { if (!valid) return; setError(''); try { await save({ id: recipe?.id ?? `receita-${Date.now()}`, name: name.trim(), category: 'Receitas-base', variableCost: total, currentPrice: 0, projectedMargin: 0, targetMargin: 0, recommendedPrice: 0, status: 'recipe', kind: 'product', yield: `${yieldQuantity} ${yieldUnit} · ${money(unitCost)}/${yieldUnit}`, yieldQuantity, yieldUnit, unitCost, componentCount: ingredients.length, components: ingredients, packaging: [] }); } catch (saveError) { setError(saveError instanceof Error ? saveError.message : 'Não foi possível salvar a receita-base.'); } }
   const dirtyRecipe = Boolean(name.trim() || yieldQuantity > 0 || draft.id || draft.quantity > 0 || ingredients.length);
   useEffect(() => { if (!recipeToast) return; const timer = window.setTimeout(() => setRecipeToast(''), 3000); return () => window.clearTimeout(timer); }, [recipeToast]);
   function close() { if (dirtyRecipe) setDiscardingRecipe(true); else finishClose(); }
@@ -330,7 +390,203 @@ function RecipeWizard({ recipe, close: finishClose, save }: { recipe: Product | 
   return <Overlay title={recipe ? 'Editar receita-base' : 'Nova receita-base'} close={close} wide><div className="recipe-wizard"><div className="recipe-wizard-head"><p>Crie um preparo intermediário reutilizável na composição dos seus produtos.</p></div><section className="recipe-identification"><h3>Identificação</h3><div className="recipe-id-grid"><label>Nome da receita<input value={name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Molho da Casa" /></label><label><LabelWithInfo label="Quanto essa receita rende depois de pronta?" text="Informe quanto você obtém no final do preparo." /><span className="yield-fields"><input aria-label="Quantidade do rendimento" type="text" inputMode="decimal" value={yieldQuantity ? String(yieldQuantity).replace('.', ',') : ''} onChange={(event) => setYieldQuantity(decimalFromInput(event.target.value))} placeholder="Ex.: 3" /><CustomSelect value={yieldUnit} onChange={setYieldUnit} ariaLabel="Unidade do rendimento" options={['kg', 'g', 'L', 'ml', 'un'].map((unit) => ({ value: unit, label: unit }))} /></span></label></div></section><section className="recipe-composition-simple"><header><h3>Composição</h3><p>Adicione os ingredientes usados neste preparo.</p></header><div className="recipe-add-surface"><h4>Adicionar à receita</h4><label className="recipe-item-field">Ingrediente<CustomSelect value={draft.id} onChange={chooseIngredient} ariaLabel="Ingrediente" placeholder="Selecione um ingrediente..." options={ingredientOptions.map((item) => ({ value: item.id, label: item.name, secondary: `${money(item.unitCost)}/${item.unit === 'g' ? 'kg' : item.unit === 'ml' ? 'L' : item.unit}` }))} /></label><div className="recipe-amount-row"><label>Quantidade<input type="text" inputMode="decimal" value={draft.quantity ? String(draft.quantity).replace('.', ',') : ''} onChange={(event) => setDraft({ ...draft, quantity: decimalFromInput(event.target.value) })} placeholder="Ex.: 500" /></label><label>Unidade<CustomSelect value={draft.unit} onChange={(value) => setDraft({ ...draft, unit: value as Unit })} ariaLabel="Unidade" options={['g', 'kg', 'ml', 'L', 'un'].map((unit) => ({ value: unit, label: unit }))} /></label></div>{draft.id && <div className="recipe-cost-results"><span><small>Custo de referência</small><b>{money(draft.unitCost)}/{draft.unit === 'g' ? 'kg' : draft.unit === 'ml' ? 'L' : draft.unit}</b></span><span><small>Custo nesta receita</small><b>{money(componentCost(draft.quantity, draft.unit, draft.unitCost))}</b></span></div>}{draft.id && unusuallyHigh(draft.quantity, draft.unit) && <p className="quantity-warning"><Info />Essa quantidade parece muito alta para uma receita. Confira antes de continuar.</p>}<button type="button" className="builder-add" disabled={!draft.id || draft.quantity <= 0 || !draft.unit} onClick={addIngredient}><Plus />{editing ? 'Salvar alteração' : 'Adicionar à receita'}</button></div><h4 className="recipe-items-title">Itens da receita</h4>{ingredients.length ? <div className="builder-list premium-list recipe-items">{ingredients.map((item) => <article key={item.id}><div><b>{item.name}</b><span>{String(item.quantity).replace('.', ',')} {item.unit} × {money(item.unitCost)}/{item.unit === 'g' ? 'kg' : item.unit === 'ml' ? 'L' : item.unit}</span></div><div className="list-cost"><strong>{money(componentCost(item.quantity, item.unit, item.unitCost))}</strong></div><div className="list-actions"><button aria-label={`Editar ${item.name}`} onClick={() => { setDraft(item); setEditing(item.id); }}><Pencil />Editar</button><button aria-label={`Remover ${item.name}`} onClick={() => setIngredients((current) => current.filter((entry) => entry.id !== item.id))}><X /></button></div></article>)}</div> : <div className="recipe-empty compact"><Layers3 /><b>Nenhum ingrediente adicionado ainda.</b><span>Selecione um item acima para começar.</span></div>}<p className="ingredient-link">Não encontrou o ingrediente? <Link href={`${routes.costs}?tab=insumos`}>Ir para Insumos <ArrowRight /></Link></p></section><section className="recipe-summary-lines"><h3>Resumo</h3><div><span>Custo total</span><b>{ingredients.length ? money(total) : '—'}</b></div><div><span>Rendimento</span><b>{yieldQuantity > 0 ? `${String(yieldQuantity).replace('.', ',')} ${yieldUnit}` : '—'}</b></div><div><LabelWithInfo label={`Custo por ${yieldUnit || 'unidade'}`} text="Esse valor será usado automaticamente quando esta receita-base fizer parte de outro produto." /><b>{ingredients.length && yieldQuantity > 0 ? `${money(unitCost)}/${yieldUnit}` : '—'}</b></div></section>{error && <p className="wizard-error" role="alert">{error}</p>}{recipeToast && <Toast message={recipeToast} close={() => setRecipeToast('')} />}<div className="wizard-actions"><button className={buttonClass('ghost')} onClick={close}>Cancelar</button><button className={buttonClass('primary')} disabled={!valid} onClick={submit}>Salvar receita-base</button></div></div></Overlay>;
 }
 
-function ImportDrawer({ close }: { close: () => void }) { const [file, setFile] = useState(''); return <Overlay title="Importar produtos" close={close}><div className="import-steps"><span className="active">1 Selecionar arquivo</span><span>2 Revisar</span><span>3 Importar</span></div><label className="file-drop"><FileUp /><b>Selecionar arquivo</b><span>Planilha XLSX ou CSV</span><input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => setFile(e.target.files?.[0]?.name ?? '')} /></label>{file && <p>Arquivo selecionado: <b>{file}</b></p>}<button className={buttonClass('secondary')}><Download />Baixar modelo</button><div className="drawer-actions"><button className={buttonClass('ghost')} onClick={close}>Cancelar</button><button className={buttonClass('primary')} disabled={!file}>Revisar arquivo</button></div></Overlay>; }
+type ImportPreview = {
+  name: string;
+  category: string;
+  price: number;
+  description: string;
+  row: number;
+  type: 'product' | 'recipe';
+  yieldQuantity?: number;
+  yieldUnit?: string;
+  components: ProductComponent[];
+  packaging: ProductPackaging[];
+};
+
+function normalizedImportHeader(value: unknown) {
+  return String(value ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\*/g, '').trim().toLocaleLowerCase('pt-BR');
+}
+
+function ImportDrawer({ close }: { close: () => void }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
+  const [preview, setPreview] = useState<ImportPreview[]>([]);
+  const [errors, setErrors] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  async function reviewFile() {
+    if (!file || busy) return;
+    setBusy(true);
+    setErrors([]);
+    try {
+      const XLSX = await import('xlsx');
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const sheet = workbook.Sheets['Produtos'] ?? workbook.Sheets[workbook.SheetNames[0]];
+      if (!sheet) throw new Error('A planilha não possui uma aba de produtos.');
+      const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: '' });
+      const headerIndex = rows.findIndex((row) => row.some((cell) => normalizedImportHeader(cell) === 'nome do produto' || normalizedImportHeader(cell) === 'nome'));
+      if (headerIndex < 0) throw new Error('Não encontrei o cabeçalho da aba Produtos. Baixe novamente o modelo da NEQTA.');
+      const headers = rows[headerIndex].map(normalizedImportHeader);
+      const column = (...names: string[]) => headers.findIndex((header) => names.includes(header));
+      const nameColumn = column('nome do produto', 'nome');
+      const categoryColumn = column('categoria');
+      const priceColumn = column('preco de venda', 'preco_venda');
+      const descriptionColumn = column('descricao (opcional)', 'descricao');
+      const typeColumn = column('tipo', 'tipo de cadastro');
+      const yieldQuantityColumn = column('rendimento', 'quantidade do rendimento');
+      const yieldUnitColumn = column('unidade do rendimento', 'unidade_rendimento');
+      const nextErrors: string[] = [];
+      const nextPreview = rows.slice(headerIndex + 1).flatMap<ImportPreview>((row, index) => {
+        const name = String(row[nameColumn] ?? '').trim();
+        const category = String(row[categoryColumn] ?? '').trim();
+        const rawPrice = row[priceColumn];
+        const price = typeof rawPrice === 'number' ? rawPrice : parseBRL(String(rawPrice ?? ''));
+        const rawType = normalizedImportHeader(row[typeColumn]);
+        const type: ImportPreview['type'] = rawType === 'receita-base' || rawType === 'receita base' || rawType === 'receita' ? 'recipe' : 'product';
+        const rawYield = row[yieldQuantityColumn];
+        const yieldQuantity = typeof rawYield === 'number' ? rawYield : Number(String(rawYield ?? '').replace(',', '.'));
+        const yieldUnit = String(row[yieldUnitColumn] ?? '').trim();
+        const rowNumber = headerIndex + index + 2;
+        if (!name && !category && !rawPrice && !rawType && !rawYield) return [];
+        if (!name || (type === 'product' && (!category || !(price > 0)))) {
+          nextErrors.push(`Linha ${rowNumber}: ${type === 'recipe' ? 'informe o nome da receita-base' : 'preencha nome, categoria e preço de venda'}.`);
+          return [];
+        }
+        if (type === 'recipe' && (!(yieldQuantity > 0) || !['kg', 'g', 'l', 'ml', 'un'].includes(yieldUnit.toLocaleLowerCase('pt-BR')))) {
+          nextErrors.push(`Linha ${rowNumber}: informe rendimento e unidade válida (kg, g, L, ml ou un) para a receita-base ${name}.`);
+        }
+        return [{ name, category: type === 'recipe' ? 'Receitas-base' : category, price: type === 'recipe' ? 0 : price, description: String(row[descriptionColumn] ?? '').trim(), row: rowNumber, type, yieldQuantity: type === 'recipe' ? yieldQuantity : undefined, yieldUnit: type === 'recipe' ? yieldUnit : undefined, components: [], packaging: [] }];
+      });
+      const duplicatedProducts = nextPreview.filter((product, index) => nextPreview.findIndex((entry) => normalizedImportHeader(entry.name) === normalizedImportHeader(product.name)) !== index);
+      duplicatedProducts.forEach((product) => nextErrors.push(`Linha ${product.row}: o produto ${product.name} aparece mais de uma vez.`));
+      const [costs, existingProducts] = await Promise.all([costService.list(), productsService.list()]);
+      nextPreview.filter((product) => existingProducts.some((entry) => normalizedImportHeader(entry.name) === normalizedImportHeader(product.name)))
+        .forEach((product) => nextErrors.push(`Linha ${product.row}: o produto ${product.name} já existe na NEQTA.`));
+
+      const compositionSheetName = workbook.SheetNames.find((name) => normalizedImportHeader(name) === 'composicao');
+      const compositionSheet = compositionSheetName ? workbook.Sheets[compositionSheetName] : undefined;
+      if (compositionSheet) {
+        const compositionRows = XLSX.utils.sheet_to_json<unknown[]>(compositionSheet, { header: 1, defval: '' });
+        const compositionHeaderIndex = compositionRows.findIndex((row) => row.some((cell) => normalizedImportHeader(cell) === 'produto'));
+        if (compositionHeaderIndex >= 0) {
+          const compositionHeaders = compositionRows[compositionHeaderIndex].map(normalizedImportHeader);
+          const compositionColumn = (...names: string[]) => compositionHeaders.findIndex((header) => names.includes(header));
+          const productColumn = compositionColumn('produto');
+          const itemColumn = compositionColumn('insumo');
+          const quantityColumn = compositionColumn('quantidade usada', 'quantidade');
+          compositionRows.slice(compositionHeaderIndex + 1).forEach((row, index) => {
+            const productName = String(row[productColumn] ?? '').trim();
+            const itemName = String(row[itemColumn] ?? '').trim();
+            const rawQuantity = row[quantityColumn];
+            const quantity = typeof rawQuantity === 'number' ? rawQuantity : Number(String(rawQuantity ?? '').replace(',', '.'));
+            const rowNumber = compositionHeaderIndex + index + 2;
+            if (!productName && !itemName && !rawQuantity) return;
+            const product = nextPreview.find((entry) => normalizedImportHeader(entry.name) === normalizedImportHeader(productName));
+            if (!product) {
+              const alreadyExists = existingProducts.some((entry) => normalizedImportHeader(entry.name) === normalizedImportHeader(productName));
+              nextErrors.push(`Composição, linha ${rowNumber}: ${alreadyExists ? `o produto ${productName} já existe e não será alterado por esta importação` : `produto ${productName || 'não informado'} não encontrado na aba Produtos`}.`);
+              return;
+            }
+            const cost = costs.find((entry) => normalizedImportHeader(entry.name) === normalizedImportHeader(itemName));
+            const matchingRecipe = nextPreview.find((entry) => entry.type === 'recipe' && normalizedImportHeader(entry.name) === normalizedImportHeader(itemName))
+              ?? existingProducts.find((entry) => entry.status === 'recipe' && normalizedImportHeader(entry.name) === normalizedImportHeader(itemName));
+            if (!cost && !matchingRecipe) {
+              nextErrors.push(`Composição, linha ${rowNumber}: insumo ou receita-base ${itemName || 'não informado'} não encontrado na NEQTA.`);
+              return;
+            }
+            if (!(quantity > 0)) {
+              nextErrors.push(`Composição, linha ${rowNumber}: informe uma quantidade maior que zero para ${itemName}.`);
+              return;
+            }
+            if (product.type === 'recipe' && (!cost || cost.type === 'packaging')) {
+              nextErrors.push(`Composição, linha ${rowNumber}: receitas-base aceitam somente ingredientes cadastrados em Custos.`);
+              return;
+            }
+            const referenceId = cost?.id ?? `recipe:${normalizedImportHeader(itemName)}`;
+            const alreadyAdded = [...product.components, ...product.packaging].some((entry) => entry.id === referenceId);
+            if (alreadyAdded) {
+              nextErrors.push(`Composição, linha ${rowNumber}: ${itemName} já foi adicionado ao produto ${productName}.`);
+              return;
+            }
+            if (cost?.type === 'packaging') {
+              product.packaging.push({ id: cost.id, name: cost.name, quantity, unitCost: cost.baseUnitCost });
+            } else if (cost) {
+              product.components.push({ id: cost.id, name: cost.name, type: 'INSUMO', quantity, unit: costItemUnit(cost.purchaseUnit), unitCost: normalizedComponentUnitCost(cost.baseUnitCost, cost.purchaseUnit) });
+            } else if (matchingRecipe) {
+              const importedRecipeCost = 'type' in matchingRecipe
+                ? matchingRecipe.components.reduce((sum, item) => sum + componentCost(item.quantity, item.unit as Unit, item.unitCost), 0) / (matchingRecipe.yieldQuantity || 1)
+                : matchingRecipe.unitCost ?? 0;
+              product.components.push({ id: referenceId, name: matchingRecipe.name, type: 'RECEITA-BASE', quantity, unit: (matchingRecipe.yieldUnit as Unit) || 'kg', unitCost: importedRecipeCost });
+            }
+          });
+        }
+      }
+      nextPreview.filter((entry) => entry.type === 'recipe' && entry.components.length === 0)
+        .forEach((entry) => nextErrors.push(`Linha ${entry.row}: adicione ao menos um ingrediente para a receita-base ${entry.name} na aba Composição.`));
+      const importedRecipes = nextPreview.filter((entry) => entry.type === 'recipe');
+      importedRecipes.forEach((recipe) => {
+        const total = recipe.components.reduce((sum, item) => sum + componentCost(item.quantity, item.unit as Unit, item.unitCost), 0);
+        const unitCost = recipe.yieldQuantity && recipe.yieldQuantity > 0 ? total / recipe.yieldQuantity : 0;
+        nextPreview.forEach((entry) => entry.components.forEach((component) => {
+          if (component.type === 'RECEITA-BASE' && normalizedImportHeader(component.name) === normalizedImportHeader(recipe.name)) component.unitCost = unitCost;
+        }));
+      });
+      if (!nextPreview.length && !nextErrors.length) nextErrors.push('Nenhum produto preenchido foi encontrado. Apague a linha de exemplo somente depois de cadastrar seus produtos.');
+      setPreview(nextPreview);
+      setErrors(nextErrors);
+      setStep(2);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : 'Não foi possível ler este arquivo.']);
+      setStep(2);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importProducts() {
+    if (!preview.length || errors.length || busy) return;
+    setBusy(true);
+    try {
+      const settings = await loadSettingsFromSupabase();
+      const savedRecipes = new Map<string, Product>();
+      for (const product of [...preview].sort((a, b) => Number(b.type === 'recipe') - Number(a.type === 'recipe'))) {
+        const resolvedComponents = product.components.map((component) => {
+          if (component.type !== 'RECEITA-BASE') return component;
+          const saved = savedRecipes.get(normalizedImportHeader(component.name));
+          return saved ? { ...component, id: saved.id, unitCost: saved.unitCost ?? component.unitCost } : component;
+        });
+        const componentsCost = resolvedComponents.reduce((total, item) => total + componentCost(item.quantity, item.unit as Unit, item.unitCost), 0);
+        const packagingCost = product.packaging.reduce((total, item) => total + item.quantity * item.unitCost, 0);
+        const saved = await productsService.create({
+          name: product.name,
+          category: product.category,
+          currentPrice: product.price,
+          targetMargin: settings.financial.targetMargin,
+          description: product.description,
+          components: resolvedComponents,
+          packaging: product.packaging,
+          variableCost: componentsCost + packagingCost,
+          isBase: product.type === 'recipe',
+          yieldQuantity: product.yieldQuantity,
+          yieldUnit: product.yieldUnit,
+        });
+        if (product.type === 'recipe') savedRecipes.set(normalizedImportHeader(product.name), saved);
+      }
+      setStep(3);
+    } catch (error) {
+      setErrors([error instanceof Error ? error.message : 'Não foi possível importar os produtos.']);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return <Overlay title="Importar produtos" close={close}><div className="import-shell">
+    <div className="import-steps improved-import-steps"><span className={step === 1 ? 'active' : ''}><b>1</b>Arquivo</span><span className={step === 2 ? 'active' : ''}><b>2</b>Revisão</span><span className={step === 3 ? 'active' : ''}><b>3</b>Importação</span></div>
+    {step === 1 && <><section className="import-template-card"><div className="import-template-icon"><Download /></div><div><h3>Comece pelo modelo da NEQTA</h3><p>O arquivo tem um manual simples e abas para produtos, composição e insumos disponíveis. Você preenche somente as células amarelo-claro.</p></div><a className={buttonClass('secondary')} href="/modelos/modelo-importacao-produtos-neqta.xlsx" download="modelo-importacao-produtos-neqta.xlsx"><Download />Baixar modelo XLSX</a></section><div className="import-or"><span>depois de preencher</span></div><label className={`file-drop improved-file-drop${file ? ' has-file' : ''}`}><FileUp /><b>{file ? 'Arquivo selecionado' : 'Arraste ou selecione sua planilha'}</b><span>{file?.name ?? 'Formatos aceitos: XLSX, XLS ou CSV'}</span><input type="file" accept=".xlsx,.xls,.csv" onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label><div className="import-help"><b>Antes de continuar</b><span>Não altere os nomes das colunas. Você poderá revisar erros e dados antes de qualquer gravação no Supabase.</span></div><div className="drawer-actions import-drawer-actions"><button className={buttonClass('ghost')} onClick={close}>Cancelar</button><button className={buttonClass('primary')} disabled={!file || busy} onClick={reviewFile}>{busy ? 'Lendo arquivo...' : 'Revisar arquivo'} <ArrowRight /></button></div></>}
+    {step === 2 && <><section className="import-review-summary"><h3>{errors.length ? 'Revise os dados da planilha' : `${preview.length} ${preview.length === 1 ? 'item pronto' : 'itens prontos'} para importar`}</h3><p>Nada foi gravado ainda. Confira produtos, receitas-base, insumos e embalagens encontrados.</p></section>{errors.length > 0 && <div className="import-review-errors" role="alert">{errors.map((error) => <p key={error}><Info />{error}</p>)}</div>}{preview.length > 0 && <div className="import-review-list">{preview.map((product) => <article key={`${product.row}-${product.name}`}><div><b>{product.name}</b><span>{product.type === 'recipe' ? `Receita-base · rendimento ${product.yieldQuantity} ${product.yieldUnit}` : product.category} · {product.components.length} {product.components.length === 1 ? 'componente' : 'componentes'} · {product.packaging.length} {product.packaging.length === 1 ? 'embalagem' : 'embalagens'}</span></div><strong>{product.type === 'recipe' ? 'Receita-base' : money(product.price)}</strong></article>)}</div>}<div className="drawer-actions import-drawer-actions"><button className={buttonClass('ghost')} onClick={() => { setStep(1); setErrors([]); }}>Voltar</button><button className={buttonClass('primary')} disabled={!preview.length || Boolean(errors.length) || busy} onClick={importProducts}>{busy ? 'Importando...' : 'Importar itens'} <ArrowRight /></button></div></>}
+    {step === 3 && <section className="import-success"><Check /><h3>Importação concluída</h3><p>{preview.length} {preview.length === 1 ? 'item foi adicionado' : 'itens foram adicionados'} ao seu sistema NEQTA.</p><button className={buttonClass('primary')} onClick={() => window.location.reload()}>Ver produtos e receitas</button></section>}
+  </div></Overlay>;
+}
 function DiscardConfirm({ keep, discard }: { keep: () => void; discard: () => void }) { return <div className="confirm-layer wizard-confirm" role="presentation"><div className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="discard-title"><h2 id="discard-title">Descartar alterações?</h2><p>As informações preenchidas neste produto serão perdidas.</p><div><button className={buttonClass('ghost')} onClick={keep}>Continuar editando</button><button className="delete-button" onClick={discard}>Descartar</button></div></div></div>; }
 function ConfirmDelete({ product, close, confirm }: { product: Product; close: () => void; confirm: () => void }) { return <div className="confirm-layer" role="presentation" onMouseDown={close}><div className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" onMouseDown={(e) => e.stopPropagation()}><h2 id="delete-title">Excluir {product.name}?</h2><p>Essa ação removerá o produto da sua lista.</p><div><button className={buttonClass('ghost')} onClick={close}>Cancelar</button><button className="delete-button" onClick={confirm}>Excluir produto</button></div></div></div>; }
 function Overlay({ title, close, wide, children }: { title: string; close: () => void; wide?: boolean; children: React.ReactNode }) {

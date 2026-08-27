@@ -1,0 +1,13 @@
+{
+  "/_not-found/page": "/_not-found",
+  "/_global-error/page": "/_global-error",
+  "/configuracoes/page": "/configuracoes",
+  "/custos/page": "/custos",
+  "/dashboard/page": "/dashboard",
+  "/login/page": "/login",
+  "/notificacoes/page": "/notificacoes",
+  "/page": "/",
+  "/precificacao/page": "/precificacao",
+  "/produtos/page": "/produtos",
+  "/promocoes/page": "/promocoes"
+}

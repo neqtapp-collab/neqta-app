@@ -23,6 +23,7 @@ import {
 
 import { routes } from '@/config/routes';
 import { createClient } from '@/lib/supabase/client';
+import { loadSettingsFromSupabase, saveSettings } from '@/lib/settings';
 import {
   getCurrentContext,
   type CurrentContext,
@@ -120,7 +121,13 @@ export function AppShell({
   }, []);
 
   useEffect(() => {
-    setLight(localStorage.getItem('neqta-theme') === 'light');
+    void loadSettingsFromSupabase().then((settings) => {
+      const resolved = settings.preferences.theme === 'system'
+        ? (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        : settings.preferences.theme;
+      setLight(resolved === 'light');
+      document.documentElement.classList.toggle('light', resolved === 'light');
+    });
 
     const syncTheme = (event: Event) =>
       setLight(
@@ -350,12 +357,12 @@ export function AppShell({
   function toggleTheme() {
     setLight((currentTheme) => {
       const nextTheme = !currentTheme;
-
-      localStorage.setItem(
-        'neqta-theme',
-        nextTheme ? 'light' : 'dark',
-      );
-
+      void loadSettingsFromSupabase().then((settings) => saveSettings({
+        ...settings,
+        preferences: { ...settings.preferences, theme: nextTheme ? 'light' : 'dark' },
+      }));
+      document.documentElement.classList.toggle('light', nextTheme);
+      window.dispatchEvent(new CustomEvent('neqta-theme-change', { detail: nextTheme ? 'light' : 'dark' }));
       return nextTheme;
     });
   }

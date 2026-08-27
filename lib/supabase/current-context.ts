@@ -1,4 +1,5 @@
 import { createClient } from '@/lib/supabase/client';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export type CurrentProfile = {
   id: string;
@@ -66,8 +67,9 @@ function getInitials(value: string) {
   return parts[0].slice(0, 2).toUpperCase();
 }
 
-export async function getCurrentContext(): Promise<CurrentContext | null> {
-  const supabase = createClient();
+export async function getCurrentContext(
+  supabase: SupabaseClient = createClient(),
+): Promise<CurrentContext | null> {
 
   const {
     data: { user },

@@ -1,0 +1,77 @@
+"use strict";(self.webpackChunk_N_E=self.webpackChunk_N_E||[]).push([[147],{1953:(e,t,r)=>{function a(e,t=""){return`ui-button ui-button--${e} ${t}`.trim()}r.d(t,{f:()=>a}),r(5155)},3363:(e,t,r)=>{r.d(t,{t:()=>i});var a=r(3512);function i(e,t,r){let i=new a.A(e||0),n=new a.A(r||0);return"g"===t||"ml"===t?i.div(1e3).mul(n).toDecimalPlaces(2).toNumber():"d\xfazia"===t?i.div(12).mul(n).toDecimalPlaces(2).toNumber():i.mul(n).toDecimalPlaces(2).toNumber()}},4824:(e,t,r)=>{r.d(t,{Sb:()=>c,X4:()=>o,ip:()=>s});var a=r(7236),i=r(7306);async function n(e){let t=e??(0,a.U)(),r=await (0,i.n)(t);if(!r?.store)throw Error("N\xe3o foi poss\xedvel identificar a loja atual.");return{supabase:t,storeId:r.store.id}}function c(e){return{async list(t){let{supabase:r,storeId:a}=await n(t),{data:i,error:c}=await r.from("neqta_records").select("record_key,data").eq("store_id",a).eq("namespace",e).order("created_at");if(c)throw Error(`Erro ao carregar ${e}: ${c.message}`);return(i??[]).map(e=>({...e.data,id:e.record_key}))},async save(t){let{supabase:r,storeId:a}=await n(),{error:i}=await r.from("neqta_records").upsert({store_id:a,namespace:e,record_key:t.id,data:t,updated_at:new Date().toISOString()},{onConflict:"store_id,namespace,record_key"});if(i)throw Error(`Erro ao salvar ${e}: ${i.message}`);return structuredClone(t)},async replaceAll(e){let t=await this.list();return await Promise.all(e.map(e=>this.save(e))),await Promise.all(t.filter(t=>!e.some(e=>e.id===t.id)).map(e=>this.remove(e.id))),structuredClone(e)},async remove(t){let{supabase:r,storeId:a}=await n(),{error:i}=await r.from("neqta_records").delete().eq("store_id",a).eq("namespace",e).eq("record_key",t);if(i)throw Error(`Erro ao remover ${e}: ${i.message}`)}}}async function o(e,t){let r=await c(e).list();return r[0]?.value??structuredClone(t)}async function s(e,t){return await c(e).save({id:"current",value:t}),structuredClone(t)}},5377:(e,t,r)=>{r.d(t,{A:()=>a});let a=(0,r(772).A)("search",[["path",{d:"m21 21-4.34-4.34",key:"14j7rj"}],["circle",{cx:"11",cy:"11",r:"8",key:"4ej97u"}]])},6312:(e,t,r)=>{function a(e,t){let r=String(e??"").replace(/\D/g,"");return"number"==typeof t?r.slice(0,t):r}function i(e){return a(e,14)}function n(e){return i(e).replace(/^(\d{2})(\d)/,"$1.$2").replace(/^(\d{2})\.(\d{3})(\d)/,"$1.$2.$3").replace(/\.(\d{3})(\d)/,".$1/$2").replace(/(\d{4})(\d)/,"$1-$2")}function c(e){let t=i(e);if(14!==t.length||/^(\d)\1{13}$/.test(t))return!1;let r=e=>{let r=e-7,a=0;for(let i=0;i<e;i+=1)a+=Number(t[i])*r--,r<2&&(r=9);let i=a%11;return i<2?0:11-i};return r(12)===Number(t[12])&&r(13)===Number(t[13])}function o(e,t=3,r){let[a="",i=""]=String(e??"").replace(/[^\d,.]/g,"").replace(",",".").split("."),n=Number(`${a.replace(/^0+(?=\d)/,"")||"0"}${i?`.${i.slice(0,t)}`:""}`);return!Number.isFinite(n)||n<0?0:"number"==typeof r?Math.min(n,r):n}function s(e){return o(e,2,100)}function d(e,t=0,r=Number.MAX_SAFE_INTEGER){let i=Number(a(e));return Number.isFinite(i)?Math.min(Math.max(i,t),r):t}function u(e,t=80){return String(e??"").trim().replace(/\s+/g," ").slice(0,t)}function m(e,t=0){if("number"==typeof e)return Number.isFinite(e)?e:t;let r=String(e??"").replace(/[^\d,.-]/g,""),a=Number(r.includes(",")?r.replace(/\./g,"").replace(",","."):r);return Number.isFinite(a)?a:t}r.d(t,{$t:()=>n,F4:()=>u,Jj:()=>i,o5:()=>d,tS:()=>o,tb:()=>s,up:()=>m,yU:()=>c})},7268:(e,t,r)=>{r.d(t,{W:()=>w});var a=r(7236),i=r(7306),n=r(3363);let c=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;function o(e){if(null==e)return 0;let t=Number(e);return Number.isFinite(t)?t:0}function s(e,t){return e<=0?"warning":e<.75*t?"critical":e<t?"warning":"healthy"}function d(e){return JSON.stringify({version:1,description:e.description??"",variableCost:e.variableCost??0,targetMargin:e.targetMargin??0,recommendedPrice:e.recommendedPrice??e.currentPrice??0,components:e.components??[],packaging:e.packaging??[]})}function u(e){return(e??[]).reduce((e,t)=>e+o(t.quantity)*o(t.unitCost),0)}function m(e){return e.normalize("NFD").replace(/[\u0300-\u036f]/g,"").trim().toLocaleLowerCase("pt-BR")}function l(e,t){if(e.id===t.id)return!0;let r=m(e.name),a=m(t.name);return r===a||r.length>=5&&a.length>=5&&(r.includes(a)||a.includes(r))}async function p(e,t){let{data:r,error:a}=await e.from("neqta_records").select("record_key,data").eq("store_id",t).eq("namespace","cost-items");if(a)throw Error(`Erro ao carregar custos dos produtos: ${a.message}`);return(r??[]).map(e=>({...e.data,id:e.record_key}))}function g(e,t){let r=(e.components??[]).map(e=>{let r=t.find(t=>"ingredient"===t.type&&l(e,t));return r?{...e,id:r.id,name:r.name,unitCost:"g"===r.purchaseUnit||"ml"===r.purchaseUnit?1e3*r.baseUnitCost:r.baseUnitCost}:e}),a=(e.packaging??[]).map(e=>{let r=t.find(t=>"packaging"===t.type&&l(e,t));return r?{...e,id:r.id,name:r.name,unitCost:r.baseUnitCost}:e}),i=r.reduce((e,t)=>e+(0,n.t)(t.quantity,t.unit,t.unitCost),0)+u(a),c=e.currentPrice>0?(e.currentPrice-i)/e.currentPrice*100:0,o=e.targetMargin<100?i/(1-e.targetMargin/100):e.currentPrice;return{...e,components:r,packaging:a,variableCost:i,projectedMargin:c,recommendedPrice:o,status:s(c,e.targetMargin)}}function y(e){var t;let r=o(e.sale_price),a=function(e){if(!e)return{};try{let t=JSON.parse(e);return 1===t.version?t:{description:e}}catch{return{description:e}}}(e.description),i=Array.isArray(a.packaging)?a.packaging:[],n=a.variableCost??0,c=a.targetMargin??0,d=r>0?(r-n)/r*100:0,u=a.recommendedPrice??r;return{id:e.id,name:e.name,category:(t=e.product_categories)?Array.isArray(t)?t[0]?.name??"":t.name??"":"",variableCost:n,currentPrice:r,projectedMargin:d,targetMargin:c,recommendedPrice:u,status:s(d,c),kind:"product",yield:e.yield_quantity&&e.yield_unit?`${o(e.yield_quantity)} ${e.yield_unit}`:void 0,yieldQuantity:null!==e.yield_quantity?o(e.yield_quantity):void 0,yieldUnit:e.yield_unit??void 0,componentCount:a.components?.length??0,description:a.description??"",components:a.components??[],packaging:i}}async function f(e){let t=await (0,i.n)(e);if(!t)throw Error("N\xe3o foi poss\xedvel identificar o contexto atual do usu\xe1rio.");if(!t.store)throw Error("N\xe3o foi poss\xedvel identificar a loja atual.");return t.store.id}async function _(e,t){let r=e?.trim();if(!r)return null;let i=(0,a.U)(),{data:n,error:c}=await i.from("product_categories").select("id").eq("store_id",t).ilike("name",r).limit(1).maybeSingle();if(c)throw Error(`Erro ao localizar categoria: ${c.message}`);if(n?.id)return n.id;let{data:o,error:s}=await i.from("product_categories").insert({store_id:t,name:r}).select("id").single();if(s)throw Error(`Erro ao criar categoria: ${s.message}`);return o.id}async function v(e){let t=(0,a.U)(),r=await f(t),{data:i,error:n}=await t.from("products").select(`
+      id,
+      store_id,
+      category_id,
+      name,
+      sku,
+      description,
+      sale_price,
+      packaging_cost,
+      is_base,
+      yield_quantity,
+      yield_unit,
+      active,
+      created_at,
+      updated_at,
+      product_categories (
+        id,
+        name
+      )
+    `).eq("id",e).eq("store_id",r).eq("active",!0).maybeSingle();if(n)throw Error(`Erro ao carregar produto: ${n.message}`);return i}let w={async list(e){let t=e??(0,a.U)(),r=await f(t),{data:i,error:n}=await t.from("products").select(`
+        id,
+        store_id,
+        category_id,
+        name,
+        sku,
+        description,
+        sale_price,
+        packaging_cost,
+        is_base,
+        yield_quantity,
+        yield_unit,
+        active,
+        created_at,
+        updated_at,
+        product_categories (
+          id,
+          name
+        )
+      `).eq("store_id",r).eq("active",!0).order("name",{ascending:!0});if(n)throw Error(`Erro ao carregar produtos: ${n.message}`);let c=await p(t,r);return i.map(y).map(e=>g(e,c))},async getById(e){let t=await v(e);if(!t)return null;let r=(0,a.U)(),i=await f(r);return g(y(t),await p(r,i))},async create(e){let t=(0,a.U)(),r=await f(t),i=await _(e.category,r),{data:n,error:c}=await t.from("products").insert({store_id:r,category_id:i,name:e.name.trim(),description:d(e),sale_price:e.currentPrice,packaging_cost:u(e.packaging),is_base:!1,active:!0}).select(`
+        id,
+        store_id,
+        category_id,
+        name,
+        sku,
+        description,
+        sale_price,
+        packaging_cost,
+        is_base,
+        yield_quantity,
+        yield_unit,
+        active,
+        created_at,
+        updated_at,
+        product_categories (
+          id,
+          name
+        )
+      `).single();if(c)throw Error(`Erro ao criar produto: ${c.message}`);return y(n)},async update(e,t){let r=(0,a.U)(),i=await f(r),n={},c=await v(e);if(!c)throw Error("Produto n\xe3o encontrado.");let o=y(c),s={name:t.name??o.name,category:t.category??o.category,currentPrice:t.currentPrice??o.currentPrice,targetMargin:t.targetMargin??o.targetMargin,kind:t.kind??o.kind,description:t.description??o.description,variableCost:t.variableCost??o.variableCost,recommendedPrice:t.recommendedPrice??o.recommendedPrice,components:t.components??o.components,packaging:t.packaging??o.packaging};void 0!==t.name&&(n.name=t.name.trim()),void 0!==t.currentPrice&&(n.sale_price=t.currentPrice),void 0!==t.category&&(n.category_id=await _(t.category,i)),(void 0!==t.description||void 0!==t.variableCost||void 0!==t.targetMargin||void 0!==t.recommendedPrice||void 0!==t.components||void 0!==t.packaging)&&(n.description=d(s)),void 0!==t.packaging&&(n.packaging_cost=u(s.packaging));let{data:m,error:l}=await r.from("products").update(n).eq("id",e).eq("store_id",i).select(`
+        id,
+        store_id,
+        category_id,
+        name,
+        sku,
+        description,
+        sale_price,
+        packaging_cost,
+        is_base,
+        yield_quantity,
+        yield_unit,
+        active,
+        created_at,
+        updated_at,
+        product_categories (
+          id,
+          name
+        )
+      `).maybeSingle();if(l)throw Error(`Erro ao atualizar produto: ${l.message}`);if(!m)throw Error("Produto n\xe3o encontrado.");return y(m)},async save(e){return c.test(e.id)&&await this.getById(e.id)?this.update(e.id,{name:e.name,category:e.category,currentPrice:e.currentPrice,targetMargin:e.targetMargin,kind:e.kind,description:e.description,variableCost:e.variableCost,recommendedPrice:e.recommendedPrice,components:e.components,packaging:e.packaging}):this.create({name:e.name,category:e.category,currentPrice:e.currentPrice,targetMargin:e.targetMargin,kind:e.kind,description:e.description,variableCost:e.variableCost,recommendedPrice:e.recommendedPrice,components:e.components,packaging:e.packaging})},async remove(e){let t=(0,a.U)(),r=await f(t),{error:i}=await t.from("products").update({active:!1}).eq("id",e).eq("store_id",r);if(i)throw Error(`Erro ao remover produto: ${i.message}`)}}},8985:(e,t,r)=>{r.d(t,{DZ:()=>d,L6:()=>c,M5:()=>o,W7:()=>s});var a=r(6312),i=r(4824);let n=null,c={company:{name:"Burger House",segment:"Restaurante",cnpj:"",taxRegime:"",operatingDays:30},financial:{targetMargin:30,minimumMargin:25,estimatedMonthlyRevenue:0,salesTax:0},channels:[{id:"store",name:"Loja / Balc\xe3o",type:"Loja f\xedsica",percentageFee:0,fixedFee:0,processesPayment:!1,active:!0},{id:"whatsapp",name:"WhatsApp",type:"Venda direta",percentageFee:0,fixedFee:0,processesPayment:!1,active:!1},{id:"delivery",name:"Delivery pr\xf3prio",type:"Delivery",percentageFee:0,fixedFee:0,processesPayment:!1,active:!1},{id:"ifood",name:"iFood",type:"Marketplace",percentageFee:23,fixedFee:0,processesPayment:!0,active:!0},{id:"99",name:"99",type:"Marketplace",percentageFee:14,fixedFee:0,processesPayment:!0,active:!0}],payments:[{id:"pix",name:"PIX",percentageFee:0,fixedFee:0,anticipationFee:0,active:!0},{id:"cash",name:"Dinheiro",percentageFee:0,fixedFee:0,anticipationFee:0,active:!0},{id:"debit",name:"D\xe9bito",percentageFee:1.49,fixedFee:0,anticipationFee:0,active:!0},{id:"credit",name:"Cr\xe9dito",percentageFee:3.49,fixedFee:0,anticipationFee:0,active:!0},{id:"online",name:"Pagamento online",percentageFee:4.29,fixedFee:0,anticipationFee:0,active:!0}],preferences:{theme:"dark",rounding:"x90",massUnit:"kg",volumeUnit:"L",itemUnit:"un",alerts:{costIncrease:!0,belowMinimumMargin:!0,safePromotion:!0}}};function o(){return n??c}async function s(){try{let e=await (0,i.X4)("settings",c),t={...c.company,...e.company},r={...c.financial,...e.financial};return n={...c,...e,company:{...t,cnpj:(0,a.Jj)(t.cnpj),operatingDays:(0,a.o5)(t.operatingDays,1,31)},financial:{...r,targetMargin:(0,a.tb)(r.targetMargin),minimumMargin:(0,a.tb)(r.minimumMargin),estimatedMonthlyRevenue:(0,a.up)(r.estimatedMonthlyRevenue),salesTax:(0,a.tb)(r.salesTax)},channels:(e.channels?.length?e.channels:c.channels).map(e=>({...e,percentageFee:(0,a.tb)(e.percentageFee),fixedFee:(0,a.up)(e.fixedFee)})),payments:(e.payments?.length?e.payments:c.payments).map(e=>({...e,percentageFee:(0,a.tb)(e.percentageFee),fixedFee:(0,a.up)(e.fixedFee),anticipationFee:(0,a.tb)(e.anticipationFee)})),preferences:{...c.preferences,...e.preferences,alerts:{...c.preferences.alerts,...e.preferences?.alerts}}}}catch{return n??c}}async function d(e){let t={...e,company:{...e.company,name:(0,a.F4)(e.company.name),segment:(0,a.F4)(e.company.segment),cnpj:(0,a.Jj)(e.company.cnpj),taxRegime:(0,a.F4)(e.company.taxRegime),operatingDays:(0,a.o5)(e.company.operatingDays,1,31)},financial:{...e.financial,targetMargin:(0,a.tb)(e.financial.targetMargin),minimumMargin:(0,a.tb)(e.financial.minimumMargin),estimatedMonthlyRevenue:Math.max(0,(0,a.up)(e.financial.estimatedMonthlyRevenue)),salesTax:(0,a.tb)(e.financial.salesTax)},channels:e.channels.map(e=>({...e,name:(0,a.F4)(e.name),percentageFee:(0,a.tb)(e.percentageFee),fixedFee:Math.max(0,(0,a.up)(e.fixedFee))})),payments:e.payments.map(e=>({...e,name:(0,a.F4)(e.name),percentageFee:(0,a.tb)(e.percentageFee),fixedFee:Math.max(0,(0,a.up)(e.fixedFee)),anticipationFee:(0,a.tb)(e.anticipationFee)}))};n=t,await (0,i.ip)("settings",t),window.dispatchEvent(new CustomEvent("neqta-settings-updated",{detail:t}))}},9315:(e,t,r)=>{r.d(t,{$H:()=>n,M9:()=>l,TG:()=>g,Yd:()=>c,ZS:()=>m,Zx:()=>p,l9:()=>s,lo:()=>o,pL:()=>d,qe:()=>u});var a=r(3512),i=r(6312);function n(e,t){return e>0?new a.A(e).minus(t).div(e).mul(100).toNumber():0}function c(e){let t=e.replace(/\D/g,"");return t?new a.A(t).div(100).toNumber():0}function o(e){return(0,i.tb)(e)}function s(e){let t=(0,i.tb)(e),r=!Number.isInteger(t);return`${t.toLocaleString("pt-BR",{minimumFractionDigits:2*!!r,maximumFractionDigits:2})}%`}function d(e,t,r=0,i=0){let n=new a.A(1).minus(new a.A(t).div(100)).minus(new a.A(r).div(100));return n.lte(0)?0:new a.A(e).plus(i).div(n).toDecimalPlaces(2).toNumber()}function u(e,t,r=0,i=0){return e<=0?null:new a.A(e).minus(t).minus(new a.A(e).mul(r).div(100)).minus(i).div(e).mul(100).toDecimalPlaces(2).toNumber()}function m(e){return e<=0?0:new a.A(e).ceil().minus(.1).toDecimalPlaces(2).toNumber()}function l(e){return e.reduce((e,t)=>e.plus(t||0),new a.A(0)).toDecimalPlaces(2).toNumber()}function p(e,t){return new a.A(e||0).mul(t||0).toDecimalPlaces(2).toNumber()}function g(e){return new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(e)}},9680:(e,t,r)=>{r.d(t,{A:()=>a});let a=(0,r(772).A)("ellipsis",[["circle",{cx:"12",cy:"12",r:"1",key:"41hilf"}],["circle",{cx:"19",cy:"12",r:"1",key:"1wjl8i"}],["circle",{cx:"5",cy:"12",r:"1",key:"1pcz8c"}]])}}]);

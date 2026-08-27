@@ -7,7 +7,7 @@ import { ArrowRight, Check, MoreHorizontal, Plus, Search, X } from 'lucide-react
 import { buttonClass } from '@/components/Button';
 import { commercialRound, formatPercent, marginForChannel, money, parseBRL, recommendedPriceForChannel } from '@/lib/financial';
 import { routes } from '@/config/routes';
-import { defaultSettings, loadSettings } from '@/lib/settings';
+import { defaultSettings, loadSettingsFromSupabase } from '@/lib/settings';
 import type { NeqtaSettings } from '@/types/settings';
 import type { Product, ProductStatus } from '@/types/product';
 import { productsService } from '@/services/products.service';
@@ -27,7 +27,7 @@ export function PricingPage({initialProducts,initialProductId}:{initialProducts:
   const [toast,setToast]=useState('');
   const [settings,setSettings]=useState<NeqtaSettings>(defaultSettings);
   useEffect(()=>{void productsService.list().then(stored=>setProducts(stored.filter(product=>product.status!=='recipe')))},[]);
-  useEffect(()=>{setSettings(loadSettings());const sync=(event:Event)=>setSettings((event as CustomEvent<NeqtaSettings>).detail);window.addEventListener('neqta-settings-updated',sync);return()=>window.removeEventListener('neqta-settings-updated',sync)},[]);
+  useEffect(()=>{void loadSettingsFromSupabase().then(setSettings);const sync=(event:Event)=>setSettings((event as CustomEvent<NeqtaSettings>).detail);window.addEventListener('neqta-settings-updated',sync);return()=>window.removeEventListener('neqta-settings-updated',sync)},[]);
   const visible=useMemo(()=>products.filter(product=>product.name.toLocaleLowerCase('pt-BR').includes(query.toLocaleLowerCase('pt-BR'))).filter(product=>filter==='all'||filter==='recommended'&&product.recommendedPrice>product.currentPrice||product.status===filter),[products,query,filter]);
   const counts={recommended:products.filter(p=>p.recommendedPrice>p.currentPrice).length,critical:products.filter(p=>p.status==='critical').length,warning:products.filter(p=>p.status==='warning').length};
   const openSimulation=(product:Product)=>setSelected(product);

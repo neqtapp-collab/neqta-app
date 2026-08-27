@@ -1,0 +1,22 @@
+1:"$Sreact.fragment"
+2:I[6268,["730","static/chunks/44530001-c4cca889f307576d.js","61","static/chunks/61-afda4473c8d57a0e.js","557","static/chunks/557-b2f79c5f87e7e98a.js","268","static/chunks/268-6e32e994407664ab.js","724","static/chunks/app/notificacoes/page-3767198f56490ede.js"],"AppShell"]
+3:I[484,[],"OutletBoundary"]
+4:"$Sreact.suspense"
+8:I[484,[],"ViewportBoundary"]
+9:I[484,[],"MetadataBoundary"]
+b:I[7121,[],""]
+c:I[4581,[],""]
+:HL["/_next/static/css/4d5755792ffe6a7d.css","style"]
+7:X
+e:X
+e:C
+0:{"buildId":"x9UdH8lNxVI4PzoMQ4xPg","data":[{"rsc":["$","$1","c",{"children":[["$","$L2",null,{"active":"","children":["$","section",null,{"className":"empty-page","children":[["$","h1",null,{"children":"Notificações"}],["$","p",null,{"children":"Alertas importantes sobre custos, margens e preços."}],["$","article",null,{"className":"card","children":[["$","h2",null,{"children":"Nenhuma notificação no momento."}],["$","p",null,{"children":"Os próximos alertas serão gerados a partir dos dados reais da sua loja."}]]}]]}]}],null,["$","$L3",null,{"children":["$","$4",null,{"name":"Next.MetadataOutlet","children":"$@5"}]}]]}],"isPartial":"$@6","staleTime":"$7","varyParams":null},{"rsc":["$","$1","h",{"children":[null,["$","$L8",null,{"children":[["$","meta","0",{"charSet":"utf-8"}],["$","meta","1",{"name":"viewport","content":"width=device-width, initial-scale=1"}]]}],["$","div",null,{"hidden":true,"children":["$","$L9",null,{"children":["$","$4",null,{"name":"Next.Metadata","children":[["$","title","0",{"children":"NEQTA — Copiloto de Precificação"}],["$","meta","1",{"name":"description","content":"Inteligência de precificação para decisões melhores."}]]}]}]}],null]}],"isPartial":"$@a","staleTime":"$7","varyParams":null},{"rsc":["$","$1","c",{"children":[null,["$","$Lb",null,{"parallelRouterKey":"children","template":["$","$Lc",null,{}]}]]}],"isPartial":"$@d","staleTime":"$7","varyParams":"$e"},{"rsc":["$","$1","c",{"children":[[["$","link","0",{"rel":"stylesheet","href":"/_next/static/css/4d5755792ffe6a7d.css","precedence":"next"}]],["$","html",null,{"lang":"pt-BR","children":["$","body",null,{"children":["$","$Lb",null,{"parallelRouterKey":"children","template":["$","$Lc",null,{}],"notFound":[[["$","title",null,{"children":"404: This page could not be found."}],["$","div",null,{"style":{"fontFamily":"system-ui,\"Segoe UI\",Roboto,Helvetica,Arial,sans-serif,\"Apple Color Emoji\",\"Segoe UI Emoji\"","height":"100vh","textAlign":"center","display":"flex","flexDirection":"column","alignItems":"center","justifyContent":"center"},"children":["$","div",null,{"children":[["$","style",null,{"dangerouslySetInnerHTML":{"__html":"body{color:#000;background:#fff;margin:0}.next-error-h1{border-right:1px solid rgba(0,0,0,.3)}@media (prefers-color-scheme:dark){body{color:#fff;background:#000}.next-error-h1{border-right:1px solid rgba(255,255,255,.3)}}"}}],["$","h1",null,{"className":"next-error-h1","style":{"display":"inline-block","margin":"0 20px 0 0","padding":"0 23px 0 0","fontSize":24,"fontWeight":500,"verticalAlign":"top","lineHeight":"49px"},"children":404}],["$","div",null,{"style":{"display":"inline-block"},"children":["$","h2",null,{"style":{"fontSize":14,"fontWeight":400,"lineHeight":"49px","margin":0},"children":"This page could not be found."}]}]]}]}]],[]]}]}]}]]}],"isPartial":"$@f","staleTime":"$7","varyParams":null}],"isUpgradeableISRFallback":false,"a":"$@10","rootVaryParams":null,"needsRuntimeRequest":"$@11"}
+5:null
+7:300
+11:true
+7:C
+10:0
+a:"$undefined"
+d:"$undefined"
+f:"$undefined"
+6:"$undefined"

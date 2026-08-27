@@ -3,14 +3,15 @@
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { ArrowRight, Check, MoreHorizontal, Plus, Search, X } from 'lucide-react';
+import { ArrowRight, Check, MoreHorizontal, Plus, Search, Sparkles, X } from 'lucide-react';
 import { buttonClass } from '@/components/Button';
 import { CustomSelect } from '@/components/CustomSelect';
 import { formatPercent, marginForChannel, money, parseBRL, parsePercent } from '@/lib/financial';
 import { todayISO } from '@/lib/date';
 import { productsService } from '@/services/products.service';
+import { promotionDismissalsService, promotionsService } from '@/services/promotions.service';
 import { routes } from '@/config/routes';
-import { defaultSettings, loadSettings } from '@/lib/settings';
+import { defaultSettings, loadSettingsFromSupabase } from '@/lib/settings';
 import type { NeqtaSettings } from '@/types/settings';
 import type { Product } from '@/types/product';
 import type { Promotion, PromotionSource, PromotionStatus, PromotionType } from '@/types/promotion';
@@ -18,7 +19,6 @@ import type { Promotion, PromotionSource, PromotionStatus, PromotionType } from 
 type Filter = 'all' | 'neqta' | 'manual' | 'active' | 'ended';
 type PromotionRow = Promotion & { product: Product; maxDiscount: number };
 
-const storageKey = 'neqta-promotions';
 const channels = [
   { id: 'store', name: 'Loja', fee: 0 },
   { id: 'ifood', name: 'iFood', fee: 23 },
@@ -66,44 +66,133 @@ function sourceLabel(source: PromotionSource) {
   return source === 'neqta' ? 'NEQTA' : 'Manual';
 }
 
-function evaluatePromotion(product: Product, promotion: Pick<Promotion, 'promotionalPrice'>, minimumMargin = 25) {
+function evaluatePromotion(product: Product, promotion: Pick<Promotion, 'promotionalPrice' | 'type' | 'secondaryProductId'>, minimumMargin = 25, products: Product[] = []) {
+  const secondaryProduct = promotion.type === 'combo'
+    ? products.find((item) => item.id === promotion.secondaryProductId)
+    : undefined;
   const promotionalPrice = promotion.promotionalPrice;
-  const margin = marginForChannel(promotionalPrice, product.variableCost, embeddedFees(product)) ?? 0;
-  const contribution = promotionalPrice - product.variableCost - promotionalPrice * embeddedFees(product) / 100;
-  const limit = safeLimit(product, minimumMargin);
-  const equivalentDiscount = product.currentPrice > 0
-    ? Math.max(0, (1 - promotionalPrice / product.currentPrice) * 100)
+  const referencePrice = product.currentPrice + (secondaryProduct?.currentPrice ?? 0);
+  const consideredCost = product.variableCost + (secondaryProduct?.variableCost ?? 0);
+  const feeAmount = product.currentPrice * embeddedFees(product) / 100
+    + (secondaryProduct ? secondaryProduct.currentPrice * embeddedFees(secondaryProduct) / 100 : 0);
+  const fees = referencePrice > 0 ? feeAmount / referencePrice * 100 : 0;
+  const financialReference = { ...product, currentPrice: referencePrice, variableCost: consideredCost, projectedMargin: 100 - consideredCost / referencePrice * 100 - fees };
+  const margin = marginForChannel(promotionalPrice, consideredCost, fees) ?? 0;
+  const contribution = promotionalPrice - consideredCost - promotionalPrice * fees / 100;
+  const limit = safeLimit(financialReference, minimumMargin);
+  const equivalentDiscount = referencePrice > 0
+    ? Math.max(0, (1 - promotionalPrice / referencePrice) * 100)
     : 0;
   const classification = statusFor(margin, minimumMargin);
   const valid = margin >= minimumMargin
     && contribution > 0
-    && promotionalPrice > product.variableCost
+    && promotionalPrice > consideredCost
     && classification !== 'unsafe'
     && equivalentDiscount <= limit.maxDiscount + 0.001;
   return { margin, contribution, classification, valid };
 }
 
-export function PromotionsPage({ initialProducts }: { initialProducts: Product[] }) {
+function suggestionSignature(parts: Array<string | number | undefined>) {
+  const input = parts.map((part) => typeof part === 'number' ? part.toFixed(2) : part ?? '').join('|');
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function buildSuggestion(product: Product, type: PromotionType, promotionalPrice: number, minimumMargin: number, products: Product[], secondaryProductId?: string): PromotionRow | null {
+  const referencePrice = product.currentPrice + (products.find((item) => item.id === secondaryProductId)?.currentPrice ?? 0);
+  const discountValue = referencePrice > 0
+    ? Math.round(Math.max(0, (1 - promotionalPrice / referencePrice) * 100) * 100) / 100
+    : 0;
+  const evaluation = evaluatePromotion(product, { type, promotionalPrice, secondaryProductId }, minimumMargin, products);
+  if (discountValue < 1 || !evaluation.valid) return null;
+  const signature = suggestionSignature([
+    product.id, type, secondaryProductId, product.currentPrice, product.variableCost,
+    products.find((item) => item.id === secondaryProductId)?.currentPrice,
+    products.find((item) => item.id === secondaryProductId)?.variableCost,
+    minimumMargin, promotionalPrice,
+  ]);
+  return {
+    id: `neqta-${type}-${product.id}-${signature}`,
+    productId: product.id,
+    secondaryProductId,
+    type,
+    discountValue,
+    promotionalPrice,
+    marginAfterPromotion: evaluation.margin,
+    channels: ['store'],
+    source: 'neqta',
+    status: evaluation.classification,
+    createdAt: todayISO(),
+    maxDiscount: safeLimit(product, minimumMargin).maxDiscount,
+    product,
+  };
+}
+
+function opportunitySuggestions(products: Product[], minimumMargin: number) {
+  const typePriority: Record<PromotionType, number> = {
+    percentage: 5,
+    price: 4,
+    fixed: 3,
+    take2: 2,
+    combo: 1,
+  };
+  return products.flatMap((product) => {
+    const limit = safeLimit(product, minimumMargin);
+    const commercial = commercialDiscount(limit.maxDiscount);
+    if (!commercial) return [];
+    const targetPrice = product.currentPrice * (1 - commercial / 100);
+    const fixedDiscount = Math.floor((product.currentPrice - limit.minimumPrice) * 2) / 2;
+    const charmPrice = Math.max(limit.minimumPrice, Math.floor(targetPrice) - 0.1);
+    const candidates: Array<PromotionRow | null> = [
+      buildSuggestion(product, 'percentage', targetPrice, minimumMargin, products),
+      fixedDiscount >= 1 ? buildSuggestion(product, 'fixed', product.currentPrice - fixedDiscount, minimumMargin, products) : null,
+      charmPrice < product.currentPrice ? buildSuggestion(product, 'price', charmPrice, minimumMargin, products) : null,
+      buildSuggestion(product, 'take2', targetPrice, minimumMargin, products),
+      ...products.filter((secondary) => secondary.id !== product.id).map((secondary) => {
+        const combined = { ...product, currentPrice: product.currentPrice + secondary.currentPrice, variableCost: product.variableCost + secondary.variableCost };
+        const comboDiscount = commercialDiscount(Math.min(limit.maxDiscount, safeLimit(secondary, minimumMargin).maxDiscount));
+        return comboDiscount
+          ? buildSuggestion(product, 'combo', combined.currentPrice * (1 - comboDiscount / 100), minimumMargin, products, secondary.id)
+          : null;
+      }),
+    ];
+    const validCandidates = candidates.filter((candidate): candidate is PromotionRow => candidate !== null);
+    const safeCandidates = validCandidates.filter((candidate) => candidate.status === 'safe');
+    const pool = safeCandidates.length ? safeCandidates : validCandidates;
+    const best = pool.sort((left, right) =>
+      right.discountValue - left.discountValue
+      || typePriority[right.type] - typePriority[left.type]
+      || right.marginAfterPromotion - left.marginAfterPromotion,
+    )[0];
+    return best ? [best] : [];
+  });
+}
+
+export function PromotionsPage({ initialProducts, initialPromotions, initialDismissedSuggestionIds = [] }: { initialProducts: Product[]; initialPromotions: Promotion[]; initialDismissedSuggestionIds?: string[] }) {
   const [products,setProducts]=useState(initialProducts.filter((product) => product.status !== 'recipe'));
-  const [saved, setSaved] = useState<Promotion[]>([]);
+  const [saved, setSaved] = useState<Promotion[]>(initialPromotions);
+  const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState(initialDismissedSuggestionIds);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
   const [picker, setPicker] = useState(false);
   const [editing, setEditing] = useState<{ product: Product; promotion?: Promotion; source: PromotionSource } | null>(null);
+  const [deleting, setDeleting] = useState<Promotion | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [toast, setToast] = useState('');
   const [settings,setSettings]=useState<NeqtaSettings>(defaultSettings);
 
-  useEffect(()=>{setSettings(loadSettings());const sync=(event:Event)=>setSettings((event as CustomEvent<NeqtaSettings>).detail);window.addEventListener('neqta-settings-updated',sync);return()=>window.removeEventListener('neqta-settings-updated',sync)},[]);
+  useEffect(()=>{void loadSettingsFromSupabase().then(setSettings);const sync=(event:Event)=>setSettings((event as CustomEvent<NeqtaSettings>).detail);window.addEventListener('neqta-settings-updated',sync);return()=>window.removeEventListener('neqta-settings-updated',sync)},[]);
   useEffect(()=>{void productsService.list().then(rows=>setProducts(rows.filter(product=>product.status!=='recipe')));const sync=(event:Event)=>setProducts(((event as CustomEvent<Product[]>).detail??[]).filter(product=>product.status!=='recipe'));window.addEventListener('neqta-products-updated',sync);return()=>window.removeEventListener('neqta-products-updated',sync)},[]);
 
   useEffect(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem(storageKey) ?? '[]') as Promotion[];
-      const corrected = stored.map((promotion) => {
+      const corrected = saved.map((promotion) => {
         const product = products.find((item) => item.id === promotion.productId);
         if (!product) return promotion;
-        const evaluation = evaluatePromotion(product, promotion, settings.financial.minimumMargin);
+        const evaluation = evaluatePromotion(product, promotion, settings.financial.minimumMargin, products);
         return {
           ...promotion,
           marginAfterPromotion: evaluation.margin,
@@ -117,34 +206,16 @@ export function PromotionsPage({ initialProducts }: { initialProducts: Product[]
         };
       });
       setSaved(corrected);
-      if (JSON.stringify(corrected) !== JSON.stringify(stored)) {
-        localStorage.setItem(storageKey, JSON.stringify(corrected));
+      if (JSON.stringify(corrected) !== JSON.stringify(saved)) {
+        setSaved(corrected);
+        void Promise.all(corrected.map((promotion) => promotionsService.save(promotion)));
       }
-    } catch {}
   }, [products, settings.financial.minimumMargin]);
 
   const suggestions = useMemo(
-    () => products.map((product) => {
-      const limit = safeLimit(product, settings.financial.minimumMargin);
-      const discount = commercialDiscount(limit.maxDiscount);
-      const price = product.currentPrice * (1 - discount / 100);
-      const margin = marginForChannel(price, product.variableCost, embeddedFees(product)) ?? 0;
-      return {
-        id: `neqta-${product.id}`,
-        productId: product.id,
-        type: 'percentage' as PromotionType,
-        discountValue: discount,
-        promotionalPrice: price,
-        marginAfterPromotion: margin,
-        channels: ['store'],
-        source: 'neqta' as PromotionSource,
-        status: discount ? statusFor(margin, settings.financial.minimumMargin) : 'unsafe' as PromotionStatus,
-        createdAt: todayISO(),
-        maxDiscount: limit.maxDiscount,
-        product,
-      };
-    }),
-    [products, settings.financial.minimumMargin],
+    () => opportunitySuggestions(products, settings.financial.minimumMargin)
+      .filter((suggestion) => !dismissedSuggestionIds.includes(suggestion.id)),
+    [products, settings.financial.minimumMargin, dismissedSuggestionIds],
   );
 
   const rows = useMemo<PromotionRow[]>(() => [
@@ -155,24 +226,28 @@ export function PromotionsPage({ initialProducts }: { initialProducts: Product[]
     }).filter((row) => row.product),
   ].filter((row) => `${row.product.name} ${typeLabels[row.type]}`.toLocaleLowerCase('pt-BR').includes(query.toLocaleLowerCase('pt-BR')))
     .filter((row) => filter === 'all'
-      || (filter === 'neqta' && row.source === 'neqta')
-      || (filter === 'manual' && row.source === 'manual')
-      || (filter === 'active' && row.status === 'active')
-      || (filter === 'ended' && row.status === 'ended')),
+      ? !row.id.startsWith('neqta-')
+      : filter === 'neqta'
+        ? row.id.startsWith('neqta-')
+        : filter === 'manual'
+          ? row.source === 'manual'
+          : filter === 'active'
+            ? row.status === 'active'
+            : row.status === 'ended'),
   [suggestions, saved, products, query, filter, settings.financial.minimumMargin]);
 
   const opportunities = suggestions.filter((row) => row.discountValue > 0);
   const maxAvailable = Math.round(Math.max(0, ...suggestions.map((row) => row.maxDiscount)));
-  const withoutSpace = suggestions.filter((row) => row.discountValue === 0).length;
+  const withoutSpace = products.filter((product) => !suggestions.some((row) => row.productId === product.id)).length;
 
   function notify(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(''), 3000);
   }
 
-  function persist(promotion: Promotion) {
+  async function persist(promotion: Promotion) {
     const product = products.find((item) => item.id === promotion.productId);
-    if (!product || !evaluatePromotion(product, promotion, settings.financial.minimumMargin).valid) {
+    if (!product || !evaluatePromotion(product, promotion, settings.financial.minimumMargin, products).valid) {
       notify('Esta promoção ultrapassa o limite seguro. Ajuste a oferta para continuar.');
       return;
     }
@@ -181,7 +256,19 @@ export function PromotionsPage({ initialProducts }: { initialProducts: Product[]
       ? saved.map((row) => row.id === validated.id ? validated : row)
       : [validated, ...saved];
     setSaved(next);
-    localStorage.setItem(storageKey, JSON.stringify(next));
+    await promotionsService.save(validated);
+    if (validated.source === 'neqta') {
+      const appliedSuggestion = suggestions.find((suggestion) =>
+        suggestion.productId === validated.productId
+        && suggestion.type === validated.type
+        && suggestion.secondaryProductId === validated.secondaryProductId
+        && Math.abs(suggestion.promotionalPrice - validated.promotionalPrice) < 0.01,
+      );
+      if (appliedSuggestion) {
+        await promotionDismissalsService.save({ id: appliedSuggestion.id, dismissedAt: new Date().toISOString() });
+        setDismissedSuggestionIds((current) => [...new Set([...current, appliedSuggestion.id])]);
+      }
+    }
     setEditing(null);
     notify('Promoção salva com sucesso.');
   }
@@ -189,13 +276,13 @@ export function PromotionsPage({ initialProducts }: { initialProducts: Product[]
   function update(promotion: Promotion) {
     const next = saved.map((row) => row.id === promotion.id ? promotion : row);
     setSaved(next);
-    localStorage.setItem(storageKey, JSON.stringify(next));
+    void promotionsService.save(promotion);
     setMenu(null);
   }
 
   function duplicate(promotion: Promotion) {
     const product = products.find((item) => item.id === promotion.productId);
-    if (!product || !evaluatePromotion(product, promotion, settings.financial.minimumMargin).valid) {
+    if (!product || !evaluatePromotion(product, promotion, settings.financial.minimumMargin, products).valid) {
       setMenu(null);
       notify('Esta promoção ultrapassa o limite seguro. Ajuste a oferta para continuar.');
       return;
@@ -216,24 +303,42 @@ export function PromotionsPage({ initialProducts }: { initialProducts: Product[]
     };
     const next = [copy, ...saved];
     setSaved(next);
-    localStorage.setItem(storageKey, JSON.stringify(next));
+    void promotionsService.save(copy);
     setMenu(null);
     notify('Promoção duplicada.');
   }
 
-  function remove(promotion: Promotion) {
-    if (!window.confirm('Excluir esta promoção?')) return;
-    const next = saved.filter((row) => row.id !== promotion.id);
-    setSaved(next);
-    localStorage.setItem(storageKey, JSON.stringify(next));
-    setMenu(null);
+  async function remove(promotion: Promotion) {
+    try {
+      await promotionsService.remove(promotion.id);
+      setSaved((current) => current.filter((row) => row.id !== promotion.id));
+      setDeleting(null);
+      setMenu(null);
+      notify('Promoção excluída.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Não foi possível excluir a promoção.');
+    }
+  }
+
+  async function dismissSuggestion(promotion: Promotion) {
+    try {
+      await promotionDismissalsService.save({
+        id: promotion.id,
+        dismissedAt: new Date().toISOString(),
+      });
+      setDismissedSuggestionIds((current) => [...new Set([...current, promotion.id])]);
+      setMenu(null);
+      notify('Sugestão dispensada.');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'Não foi possível dispensar a sugestão.');
+    }
   }
 
   return (
     <section className="promotions-page">
       <header className="promotions-heading">
         <div><h1>Promoções</h1><p>Crie ofertas sem comprometer sua margem.</p></div>
-        <button className={buttonClass('primary')} onClick={() => setPicker(true)}><Plus />Nova promoção</button>
+        <div className="promotions-heading-actions"><button className={buttonClass('secondary')} onClick={() => setFilter('neqta')}><Sparkles />Ver sugestões</button><button className={buttonClass('primary')} onClick={() => setPicker(true)}><Plus />Nova promoção</button></div>
       </header>
 
       <section className="card promotions-xray">
@@ -254,17 +359,23 @@ export function PromotionsPage({ initialProducts }: { initialProducts: Product[]
         </div>
       </section>
 
-      <PromotionTable rows={rows} simulate={(row) => setEditing({ product: row.product, promotion: row, source: row.source })} menu={menu} setMenu={setMenu} update={update} duplicate={duplicate} remove={remove} />
+      <PromotionTable rows={rows} simulate={(row) => setEditing({ product: row.product, promotion: row, source: row.source })} menu={menu} setMenu={setMenu} update={update} duplicate={duplicate} remove={(row) => { setDeleting(row); setMenu(null); }} dismissSuggestion={dismissSuggestion} />
       <PromotionCards rows={rows} open={(row) => setEditing({ product: row.product, promotion: row, source: row.source })} />
 
       {picker && <PromotionPicker products={products} minimumMargin={settings.financial.minimumMargin} close={() => setPicker(false)} choose={(product) => { setPicker(false); setEditing({ product, source: 'manual' }); }} />}
       {editing && <PromotionDrawer product={editing.product} products={products} settings={settings} initial={editing.promotion} source={editing.source} close={() => setEditing(null)} save={persist} />}
+      {deleting && <PromotionDeleteConfirm promotion={deleting} product={products.find((item) => item.id === deleting.productId)} close={() => setDeleting(null)} confirm={() => void remove(deleting)} />}
       {toast && <div className="app-toast"><span><Check />{toast}</span><button onClick={() => setToast('')} aria-label="Fechar"><X /></button></div>}
     </section>
   );
 }
 
-function PromotionTable({ rows, simulate, menu, setMenu, update, duplicate, remove }: {
+function PromotionDeleteConfirm({ promotion, product, close, confirm }: { promotion: Promotion; product?: Product; close: () => void; confirm: () => void }) {
+  const label = promotion.type === 'percentage' ? `${promotion.discountValue}% OFF` : typeLabels[promotion.type];
+  return <div className="confirm-layer" role="presentation" onMouseDown={close}><div className="confirm-dialog" role="alertdialog" aria-modal="true" aria-labelledby="promotion-delete-title" onMouseDown={(event) => event.stopPropagation()}><h2 id="promotion-delete-title">Excluir promoção?</h2><p>A promoção {label} de <b>{product?.name ?? 'este produto'}</b> será removida definitivamente.</p><div><button className={buttonClass('ghost')} onClick={close}>Cancelar</button><button className="delete-button" onClick={confirm}>Excluir promoção</button></div></div></div>;
+}
+
+function PromotionTable({ rows, simulate, menu, setMenu, update, duplicate, remove, dismissSuggestion }: {
   rows: PromotionRow[];
   simulate: (row: PromotionRow) => void;
   menu: string | null;
@@ -272,8 +383,9 @@ function PromotionTable({ rows, simulate, menu, setMenu, update, duplicate, remo
   update: (promotion: Promotion) => void;
   duplicate: (promotion: Promotion) => void;
   remove: (promotion: Promotion) => void;
+  dismissSuggestion: (promotion: Promotion) => void;
 }) {
-  return <section className="card promotions-table-wrap"><table className="promotions-table"><thead><tr><th>Produto</th><th>Preço atual</th><th>Promoção</th><th>Preço promocional</th><th>Margem após promoção</th><th>Origem</th><th>Status</th><th>Ações</th></tr></thead><tbody>{rows.map((row) => <tr key={row.id} onClick={() => simulate(row)}><td><b>{row.product.name}</b><small>{row.product.category}</small></td><td>{money(row.product.currentPrice)}</td><td>{row.discountValue ? row.type === 'percentage' ? `${row.discountValue}% OFF` : typeLabels[row.type] : 'Sem desconto sugerido'}</td><td>{row.discountValue ? money(row.promotionalPrice) : '—'}</td><td>{row.discountValue ? formatPercent(row.marginAfterPromotion) : '—'}</td><td><span className={`promotion-origin ${row.source}`}>{sourceLabel(row.source)}</span></td><td><PromotionStatusBadge status={row.status} /></td><td className="promotion-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => setMenu(menu === row.id ? null : row.id)} aria-label={`Ações de ${row.product.name}`}><MoreHorizontal /></button>{menu === row.id && <div className="action-menu"><button onClick={() => simulate(row)}>{row.source === 'neqta' ? 'Simular' : 'Editar'}</button>{row.source === 'neqta' && row.discountValue > 0 && <button onClick={() => simulate(row)}>Usar promoção</button>}{row.source === 'manual' && <><button onClick={() => duplicate(row)}>Duplicar</button><button onClick={() => update({ ...row, status: 'ended' })}>Encerrar</button><button className="danger-action" onClick={() => remove(row)}>Excluir</button></>}</div>}</td></tr>)}</tbody></table></section>;
+  return <section className="card promotions-table-wrap"><table className="promotions-table"><thead><tr><th>Produto</th><th>Preço atual</th><th>Promoção</th><th>Preço promocional</th><th>Margem após promoção</th><th>Origem</th><th>Status</th><th>Ações</th></tr></thead><tbody>{rows.map((row) => { const isSuggestion = row.id.startsWith('neqta-'); return <tr key={row.id} onClick={() => simulate(row)}><td><b>{row.product.name}</b><small>{row.product.category}</small></td><td>{money(row.product.currentPrice)}</td><td>{row.discountValue ? row.type === 'percentage' ? `${row.discountValue}% OFF` : typeLabels[row.type] : 'Sem desconto sugerido'}</td><td>{row.discountValue ? money(row.promotionalPrice) : '—'}</td><td>{row.discountValue ? formatPercent(row.marginAfterPromotion) : '—'}</td><td><span className={`promotion-origin ${row.source}`}>{sourceLabel(row.source)}</span></td><td><PromotionStatusBadge status={row.status} /></td><td className="promotion-actions" onClick={(event) => event.stopPropagation()}><button onClick={() => setMenu(menu === row.id ? null : row.id)} aria-label={`Ações de ${row.product.name}`}><MoreHorizontal /></button>{menu === row.id && <div className="action-menu"><button onClick={() => simulate(row)}>{isSuggestion ? 'Simular' : 'Editar'}</button>{isSuggestion && row.discountValue > 0 && <button onClick={() => simulate(row)}>Usar promoção</button>}{isSuggestion && <button className="danger-action" onClick={() => void dismissSuggestion(row)}>Dispensar sugestão</button>}{!isSuggestion && <><button onClick={() => duplicate(row)}>Duplicar</button>{row.status !== 'ended' && <button onClick={() => update({ ...row, status: 'ended' })}>Encerrar</button>}<button className="danger-action" onClick={() => void remove(row)}>Excluir</button></>}</div>}</td></tr>; })}</tbody></table></section>;
 }
 
 function PromotionCards({ rows, open }: { rows: PromotionRow[]; open: (row: PromotionRow) => void }) {
@@ -297,7 +409,13 @@ function PromotionDrawer({ product, products, settings, initial, source, close, 
   const suggestionPrice = product.currentPrice * (1 - suggestionDiscount / 100);
   const suggestionMargin = marginForChannel(suggestionPrice, product.variableCost, embeddedFees(product)) ?? 0;
   const [type, setType] = useState<PromotionType>(initial?.type ?? 'percentage');
-  const [value, setValue] = useState(initial?.type === 'price' || initial?.type === 'combo' ? initial.promotionalPrice : initial?.discountValue ?? 0);
+  const [value, setValue] = useState(() => {
+    if (!initial) return 0;
+    if (initial.type === 'price' || initial.type === 'combo') return initial.promotionalPrice;
+    if (initial.type === 'take2') return initial.promotionalPrice * 2;
+    if (initial.type === 'fixed') return Math.max(0, product.currentPrice - initial.promotionalPrice);
+    return initial.discountValue;
+  });
   const [secondaryProductId, setSecondaryProductId] = useState(initial?.secondaryProductId ?? '');
   const [selectedChannels, setChannels] = useState(initial?.channels?.length ? initial.channels : ['store']);
   const [startDate, setStart] = useState(initial?.startDate ?? '');
@@ -353,7 +471,7 @@ function PromotionDrawer({ product, products, settings, initial, source, close, 
     <section className="promotion-current"><span>Custo variável<b>{money(product.variableCost)}</b></span><span>Preço atual<b>{money(product.currentPrice)}</b></span><span>Margem projetada<b>{formatPercent(product.projectedMargin)}</b></span><span>Margem mínima configurada<b>{formatPercent(minimumMargin)}</b></span></section>
     {noSpace && <section className="promotion-alert"><b>Este produto não possui margem disponível para desconto.</b><p>Revise o preço antes de criar uma promoção.</p><Link href={`${routes.pricing}?produto=${product.id}`}>Ir para Precificação</Link></section>}
     {!noSpace && suggestionDiscount > 0 && <section className="promotion-suggestion"><div><small>Sugestão NEQTA</small><strong>{suggestionDiscount}% OFF</strong><span>{money(product.currentPrice)} <ArrowRight /> {money(suggestionPrice)}</span><p>Margem após promoção: <b>{formatPercent(suggestionMargin)}</b></p></div><button className={`${buttonClass('ghost')} promotion-apply-suggestion`} onClick={applySuggestion}>Aplicar sugestão</button></section>}
-    {!noSpace && <><section className="promotion-builder"><h3>Simular promoção</h3><label>Tipo de promoção<CustomSelect value={type} onChange={(next) => { const nextType = next as PromotionType; setType(nextType); setValue(0); if (nextType !== 'combo') setSecondaryProductId(''); }} ariaLabel="Tipo de promoção" options={(Object.keys(typeLabels) as PromotionType[]).map((key) => ({ value: key, label: typeLabels[key] }))} /></label>{type === 'combo' && <label>Produto adicional<CustomSelect value={secondaryProductId} onChange={setSecondaryProductId} ariaLabel="Produto adicional do combo" placeholder="Selecione um produto..." options={products.filter((item) => item.id !== product.id).map((item) => ({ value: item.id, label: `${item.name} · ${money(item.currentPrice)}` }))} /></label>}<label>{type === 'percentage' ? 'Desconto (%)' : type === 'fixed' ? 'Desconto (R$)' : type === 'take2' ? 'Preço total para 2 unidades' : type === 'combo' ? 'Preço do combo' : 'Preço promocional'}<input inputMode="decimal" value={type === 'percentage' ? value || '' : value ? money(value) : ''} onChange={(event) => setValue(type === 'percentage' ? parsePercent(event.target.value) : parseBRL(event.target.value))} /></label>
+    {!noSpace && <><section className="promotion-builder"><h3>Simular promoção</h3><label>Tipo de promoção<CustomSelect value={type} onChange={(next) => { const nextType = next as PromotionType; setType(nextType); setValue(0); if (nextType !== 'combo') setSecondaryProductId(''); }} ariaLabel="Tipo de promoção" options={(Object.keys(typeLabels) as PromotionType[]).map((key) => ({ value: key, label: typeLabels[key] }))} /></label>{type === 'combo' && <label>Produto adicional<CustomSelect value={secondaryProductId} onChange={setSecondaryProductId} ariaLabel="Produto adicional do combo" placeholder="Selecione um produto..." options={products.filter((item) => item.id !== product.id).map((item) => ({ value: item.id, label: `${item.name} · ${money(item.currentPrice)}` }))} /><small>O produto principal ({product.name}) já faz parte do combo. A lista mostra todos os outros produtos disponíveis.</small></label>}<label>{type === 'percentage' ? 'Desconto (%)' : type === 'fixed' ? 'Desconto (R$)' : type === 'take2' ? 'Preço total para 2 unidades' : type === 'combo' ? 'Preço do combo' : 'Preço promocional'}<input inputMode="decimal" value={type === 'percentage' ? value || '' : value ? money(value) : ''} onChange={(event) => setValue(type === 'percentage' ? parsePercent(event.target.value) : parseBRL(event.target.value))} /></label>
       <div className="promotion-result"><span className="promotion-result-primary">Preço promocional<b>{money(promotionalPrice)}</b></span><span className="promotion-result-primary">Margem após promoção<b>{formatPercent(margin)}</b></span><span>Desconto<b>{formatPercent(equivalentDiscount)}</b></span><span>Desconto máximo seguro<b>{formatPercent(activeLimit.maxDiscount)}</b></span><span>Contribuição estimada por unidade<b>{money(Math.max(0, contribution))}</b></span><span>Classificação<PromotionStatusBadge status={status} /></span></div>
       {!financiallyValid && equivalentDiscount > 0 && <p className="promotion-limit-warning">Esta promoção ultrapassa o limite seguro. Ajuste a oferta para continuar.</p>}
     </section>
