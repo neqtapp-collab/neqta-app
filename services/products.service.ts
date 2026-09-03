@@ -14,7 +14,7 @@ import type { CostItem } from '@/types/cost';
 import { componentCost, type Unit } from '@/lib/units';
 
 type ProductMetadata = Pick<Product,
-  'description' | 'variableCost' | 'targetMargin' | 'recommendedPrice' | 'components' | 'packaging'
+  'description' | 'variableCost' | 'targetMargin' | 'recommendedPrice' | 'components' | 'packaging' | 'laborMinutes' | 'directOperationalCost' | 'operationalCosts' | 'utilityUsages'
 > & { version: 1 };
 
 type ProductCategoryRow = {
@@ -124,6 +124,10 @@ function writeMetadata(dto: CreateProductDTO | UpdateProductDTO): string {
     recommendedPrice: dto.recommendedPrice ?? dto.currentPrice ?? 0,
     components: dto.components ?? [],
     packaging: dto.packaging ?? [],
+    laborMinutes: dto.laborMinutes ?? 0,
+    directOperationalCost: dto.directOperationalCost ?? 0,
+    operationalCosts: dto.operationalCosts ?? [],
+    utilityUsages: dto.utilityUsages ?? [],
   } satisfies ProductMetadata);
 }
 
@@ -244,6 +248,10 @@ function mapProduct(row: ProductRow): Product {
     description: metadata.description ?? '',
     components: metadata.components ?? [],
     packaging,
+    laborMinutes: metadata.laborMinutes ?? 0,
+    directOperationalCost: metadata.directOperationalCost ?? 0,
+    operationalCosts: metadata.operationalCosts ?? [],
+    utilityUsages: metadata.utilityUsages ?? [],
   };
 }
 
@@ -353,7 +361,7 @@ export const productsService: ProductsService = {
     const supabase = providedClient ?? createClient();
     const storeId = await getStoreId(supabase);
 
-    const { data, error } = await supabase
+    const productsRequest = supabase
       .from('products')
       .select(`
         id,
@@ -381,13 +389,17 @@ export const productsService: ProductsService = {
         ascending: true,
       });
 
+    const [{ data, error }, costs] = await Promise.all([
+      productsRequest,
+      loadCostItems(supabase, storeId),
+    ]);
+
     if (error) {
       throw new Error(
         `Erro ao carregar produtos: ${error.message}`,
       );
     }
 
-    const costs = await loadCostItems(supabase, storeId);
     return (data as ProductRow[]).map(mapProduct).map((product) => enrichProductCosts(product, costs));
   },
 
@@ -496,6 +508,10 @@ export const productsService: ProductsService = {
       recommendedPrice: dto.recommendedPrice ?? current.recommendedPrice,
       components: dto.components ?? current.components,
       packaging: dto.packaging ?? current.packaging,
+      laborMinutes: dto.laborMinutes ?? current.laborMinutes,
+      directOperationalCost: dto.directOperationalCost ?? current.directOperationalCost,
+      operationalCosts: dto.operationalCosts ?? current.operationalCosts,
+      utilityUsages: dto.utilityUsages ?? current.utilityUsages,
       isBase: dto.isBase ?? current.status === 'recipe',
       yieldQuantity: dto.yieldQuantity ?? current.yieldQuantity,
       yieldUnit: dto.yieldUnit ?? current.yieldUnit,
@@ -518,7 +534,7 @@ export const productsService: ProductsService = {
 
     if (dto.description !== undefined || dto.variableCost !== undefined ||
         dto.targetMargin !== undefined || dto.recommendedPrice !== undefined ||
-        dto.components !== undefined || dto.packaging !== undefined) {
+        dto.components !== undefined || dto.packaging !== undefined || dto.laborMinutes !== undefined || dto.directOperationalCost !== undefined || dto.operationalCosts !== undefined || dto.utilityUsages !== undefined) {
       payload.description = writeMetadata(mergedDto);
     }
 
@@ -582,6 +598,10 @@ export const productsService: ProductsService = {
         recommendedPrice: product.recommendedPrice,
         components: product.components,
         packaging: product.packaging,
+        laborMinutes: product.laborMinutes,
+        directOperationalCost: product.directOperationalCost,
+        operationalCosts: product.operationalCosts,
+        utilityUsages: product.utilityUsages,
         isBase: product.status === 'recipe',
         yieldQuantity: product.yieldQuantity,
         yieldUnit: product.yieldUnit,
@@ -609,6 +629,10 @@ export const productsService: ProductsService = {
         recommendedPrice: product.recommendedPrice,
         components: product.components,
         packaging: product.packaging,
+        laborMinutes: product.laborMinutes,
+        directOperationalCost: product.directOperationalCost,
+        operationalCosts: product.operationalCosts,
+        utilityUsages: product.utilityUsages,
         isBase: product.status === 'recipe',
         yieldQuantity: product.yieldQuantity,
         yieldUnit: product.yieldUnit,
@@ -626,6 +650,10 @@ export const productsService: ProductsService = {
       recommendedPrice: product.recommendedPrice,
       components: product.components,
       packaging: product.packaging,
+      laborMinutes: product.laborMinutes,
+      directOperationalCost: product.directOperationalCost,
+      operationalCosts: product.operationalCosts,
+      utilityUsages: product.utilityUsages,
       isBase: product.status === 'recipe',
       yieldQuantity: product.yieldQuantity,
       yieldUnit: product.yieldUnit,

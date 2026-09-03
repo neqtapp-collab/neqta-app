@@ -30,7 +30,16 @@ export type CostItem = {
 };
 
 export type Purchase = { id: string; itemId: string; supplierId?: string; date: string; quantity: number; unit: PurchaseUnit; price: number; freight?: number; discount?: number; notes?: string };
-export type StructureCost = { id: string; description: string; category: string; monthlyValue: number; recurrence: 'monthly' };
-export type TeamCost = { id: string; role: string; salary: number; charges: number; benefits: number; otherCosts: number };
+export type StructureCost = { id: string; description: string; category: string; monthlyValue: number; recurrence: 'monthly'; allocationMode?: 'all' | 'selected' };
+export type TeamCost = {
+  id: string;
+  role: string;
+  salary: number;
+  charges: number;
+  benefits: number;
+  otherCosts: number;
+  directProduction?: boolean;
+  productiveHoursMonthly?: number;
+};
 
 export type CostItemPayload = Omit<CostItem, 'id' | 'baseUnitCost' | 'history' | 'usedBy' | 'createdAt' | 'updatedAt'> & { id?: string };

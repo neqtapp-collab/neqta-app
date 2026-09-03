@@ -4,10 +4,16 @@ import { loadStoreValue, saveStoreValue } from '@/services/store-records.service
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 let cachedSettings: NeqtaSettings | null = null;
+let settingsRequest: Promise<NeqtaSettings> | null = null;
+
+export function invalidateSettingsCache() {
+  cachedSettings = null;
+  settingsRequest = null;
+}
 
 export const defaultSettings: NeqtaSettings = {
   company: { name: '', segment: '', cnpj: '', taxRegime: '', operatingDays: 30 },
-  financial: { targetMargin: 30, minimumMargin: 25, estimatedMonthlyRevenue: 0, salesTax: 0 },
+  financial: { targetMargin: 30, minimumMargin: 25, estimatedMonthlyRevenue: 0, salesTax: 0, operationalReserve: 0, paymentFeeStrategy: 'highest' },
   channels: [
     { id: 'store', name: 'Loja / Balcão', type: 'Loja física', percentageFee: 0, fixedFee: 0, processesPayment: false, active: true },
   ],
@@ -33,7 +39,7 @@ function isLegacyPaymentPreset(rows: NeqtaSettings['payments'] | undefined) {
     && rows.every((row) => expected[row.id] === row.percentageFee && row.fixedFee === 0 && row.anticipationFee === 0);
 }
 
-export async function loadSettingsFromSupabase(client?: SupabaseClient): Promise<NeqtaSettings> {
+async function fetchSettings(client?: SupabaseClient): Promise<NeqtaSettings> {
   try {
     const stored = await loadStoreValue<Partial<NeqtaSettings>>('settings', defaultSettings, client);
     const company = { ...defaultSettings.company, ...stored.company };
@@ -42,7 +48,7 @@ export async function loadSettingsFromSupabase(client?: SupabaseClient): Promise
       ...defaultSettings,
       ...stored,
       company: { ...company, cnpj: normalizeCNPJ(company.cnpj), operatingDays: sanitizeInteger(company.operatingDays, 1, 31) },
-      financial: { ...financial, targetMargin: sanitizePercent(financial.targetMargin), minimumMargin: sanitizePercent(financial.minimumMargin), estimatedMonthlyRevenue: normalizeStoredNumber(financial.estimatedMonthlyRevenue), salesTax: sanitizePercent(financial.salesTax) },
+      financial: { ...financial, targetMargin: sanitizePercent(financial.targetMargin), minimumMargin: sanitizePercent(financial.minimumMargin), estimatedMonthlyRevenue: normalizeStoredNumber(financial.estimatedMonthlyRevenue), salesTax: sanitizePercent(financial.salesTax), operationalReserve: sanitizePercent(financial.operationalReserve), paymentFeeStrategy: financial.paymentFeeStrategy === 'first' ? 'first' : 'highest' },
       channels: (isLegacyChannelPreset(stored.channels) ? defaultSettings.channels : stored.channels?.length ? stored.channels : defaultSettings.channels).map(channel => ({ ...channel, percentageFee: sanitizePercent(channel.percentageFee), fixedFee: normalizeStoredNumber(channel.fixedFee) })),
       payments: (isLegacyPaymentPreset(stored.payments) ? defaultSettings.payments : stored.payments?.length ? stored.payments : defaultSettings.payments).map(payment => ({ ...payment, percentageFee: sanitizePercent(payment.percentageFee), fixedFee: normalizeStoredNumber(payment.fixedFee), anticipationFee: sanitizePercent(payment.anticipationFee) })),
       preferences: {
@@ -55,11 +61,21 @@ export async function loadSettingsFromSupabase(client?: SupabaseClient): Promise
   } catch { return cachedSettings ?? defaultSettings; }
 }
 
+export function loadSettingsFromSupabase(client?: SupabaseClient): Promise<NeqtaSettings> {
+  // Clientes de servidor pertencem a requisições/lojas diferentes e nunca
+  // devem compartilhar o cache global do navegador.
+  if (client) return fetchSettings(client);
+  if (cachedSettings) return Promise.resolve(cachedSettings);
+  if (settingsRequest) return settingsRequest;
+  settingsRequest = fetchSettings(client).finally(() => { settingsRequest = null; });
+  return settingsRequest;
+}
+
 export async function saveSettings(settings: NeqtaSettings) {
   const normalized: NeqtaSettings = {
     ...settings,
     company: { ...settings.company, name: normalizeShortText(settings.company.name), segment: normalizeShortText(settings.company.segment), cnpj: normalizeCNPJ(settings.company.cnpj), taxRegime: normalizeShortText(settings.company.taxRegime), operatingDays: sanitizeInteger(settings.company.operatingDays, 1, 31) },
-    financial: { ...settings.financial, targetMargin: sanitizePercent(settings.financial.targetMargin), minimumMargin: sanitizePercent(settings.financial.minimumMargin), estimatedMonthlyRevenue: Math.max(0, normalizeStoredNumber(settings.financial.estimatedMonthlyRevenue)), salesTax: sanitizePercent(settings.financial.salesTax) },
+    financial: { ...settings.financial, targetMargin: sanitizePercent(settings.financial.targetMargin), minimumMargin: sanitizePercent(settings.financial.minimumMargin), estimatedMonthlyRevenue: Math.max(0, normalizeStoredNumber(settings.financial.estimatedMonthlyRevenue)), salesTax: sanitizePercent(settings.financial.salesTax), operationalReserve: sanitizePercent(settings.financial.operationalReserve), paymentFeeStrategy: settings.financial.paymentFeeStrategy === 'first' ? 'first' : 'highest' },
     channels: settings.channels.map(channel => ({ ...channel, name: normalizeShortText(channel.name), percentageFee: sanitizePercent(channel.percentageFee), fixedFee: Math.max(0, normalizeStoredNumber(channel.fixedFee)) })),
     payments: settings.payments.map(payment => ({ ...payment, name: normalizeShortText(payment.name), percentageFee: sanitizePercent(payment.percentageFee), fixedFee: Math.max(0, normalizeStoredNumber(payment.fixedFee)), anticipationFee: sanitizePercent(payment.anticipationFee) })),
   };

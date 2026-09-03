@@ -8,6 +8,8 @@ export interface ProductComponent {
 export interface ProductPackaging {
   id: string; name: string; quantity: number; unitCost: number;
 }
+export type ProductOperationalCost = { kind: 'gas' | 'energy' | 'water' | 'consumables' | 'other'; name: string; amount: number };
+export type ProductUtilityUsage = { costId: string; intensity: 'low' | 'medium' | 'high' };
 
 export interface Product {
   id: string; name: string; category: string; variableCost: number;
@@ -15,6 +17,10 @@ export interface Product {
   recommendedPrice: number; status: ProductStatus; kind: ProductKind; yield?: string;
   yieldQuantity?: number; yieldUnit?: string; unitCost?: number; componentCount?: number;
   description?: string; components?: ProductComponent[]; packaging?: ProductPackaging[];
+  laborMinutes?: number;
+  directOperationalCost?: number;
+  operationalCosts?: ProductOperationalCost[];
+  utilityUsages?: ProductUtilityUsage[];
 }
 
 export interface CreateProductDTO {
@@ -22,5 +28,8 @@ export interface CreateProductDTO {
   description?: string; variableCost?: number; recommendedPrice?: number;
   components?: ProductComponent[]; packaging?: ProductPackaging[];
   isBase?: boolean; yieldQuantity?: number; yieldUnit?: string;
+  laborMinutes?: number; directOperationalCost?: number;
+  operationalCosts?: ProductOperationalCost[];
+  utilityUsages?: ProductUtilityUsage[];
 }
 export type UpdateProductDTO = Partial<CreateProductDTO>;

@@ -24,7 +24,14 @@ export type PaymentSetting = {
 
 export type NeqtaSettings = {
   company: { name: string; segment: string; cnpj: string; taxRegime: string; operatingDays: number };
-  financial: { targetMargin: number; minimumMargin: number; estimatedMonthlyRevenue: number; salesTax: number };
+  financial: {
+    targetMargin: number;
+    minimumMargin: number;
+    estimatedMonthlyRevenue: number;
+    salesTax: number;
+    operationalReserve: number;
+    paymentFeeStrategy: 'highest' | 'first';
+  };
   channels: SalesChannelSetting[];
   payments: PaymentSetting[];
   preferences: {

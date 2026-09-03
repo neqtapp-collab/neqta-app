@@ -49,6 +49,12 @@ export type CurrentContext = {
   companyName: string;
 };
 
+let contextCache = new WeakMap<SupabaseClient, Promise<CurrentContext | null>>();
+
+export function invalidateCurrentContext() {
+  contextCache = new WeakMap<SupabaseClient, Promise<CurrentContext | null>>();
+}
+
 function getInitials(value: string) {
   const cleanValue = value.trim();
 
@@ -67,9 +73,7 @@ function getInitials(value: string) {
   return parts[0].slice(0, 2).toUpperCase();
 }
 
-export async function getCurrentContext(
-  supabase: SupabaseClient = createClient(),
-): Promise<CurrentContext | null> {
+async function loadCurrentContext(supabase: SupabaseClient): Promise<CurrentContext | null> {
 
   const {
     data: { user },
@@ -80,11 +84,12 @@ export async function getCurrentContext(
     return null;
   }
 
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('id, full_name, avatar_url')
-    .eq('id', user.id)
-    .maybeSingle();
+  const [profileResult, membershipResult] = await Promise.all([
+    supabase.from('profiles').select('id, full_name, avatar_url').eq('id', user.id).maybeSingle(),
+    supabase.from('organization_members').select('organization_id, user_id, role, active').eq('user_id', user.id).eq('active', true).limit(1).maybeSingle(),
+  ]);
+  const { data: profile, error: profileError } = profileResult;
+  const { data: membership, error: membershipError } = membershipResult;
 
   if (profileError) {
     console.error(
@@ -92,15 +97,6 @@ export async function getCurrentContext(
       profileError,
     );
   }
-
-  const { data: membership, error: membershipError } =
-    await supabase
-      .from('organization_members')
-      .select('organization_id, user_id, role, active')
-      .eq('user_id', user.id)
-      .eq('active', true)
-      .limit(1)
-      .maybeSingle();
 
   if (membershipError) {
     console.error(
@@ -113,15 +109,12 @@ export async function getCurrentContext(
   let store: CurrentStore | null = null;
 
   if (membership?.organization_id) {
-    const {
-      data: organizationData,
-      error: organizationError,
-    } = await supabase
-      .from('organizations')
-      .select('id, name, slug, created_by, active')
-      .eq('id', membership.organization_id)
-      .eq('active', true)
-      .maybeSingle();
+    const [organizationResult, storeResult] = await Promise.all([
+      supabase.from('organizations').select('id, name, slug, created_by, active').eq('id', membership.organization_id).eq('active', true).maybeSingle(),
+      supabase.from('stores').select('id, organization_id, name, slug, segment, cnpj, tax_regime, operating_days_per_month, timezone, active').eq('organization_id', membership.organization_id).eq('active', true).order('created_at', { ascending: true }).limit(1).maybeSingle(),
+    ]);
+    const { data: organizationData, error: organizationError } = organizationResult;
+    const { data: storeData, error: storeError } = storeResult;
 
     if (organizationError) {
       console.error(
@@ -132,31 +125,6 @@ export async function getCurrentContext(
       organization =
         organizationData as CurrentOrganization | null;
     }
-
-    const {
-      data: storeData,
-      error: storeError,
-    } = await supabase
-      .from('stores')
-      .select(`
-        id,
-        organization_id,
-        name,
-        slug,
-        segment,
-        cnpj,
-        tax_regime,
-        operating_days_per_month,
-        timezone,
-        active
-      `)
-      .eq('organization_id', membership.organization_id)
-      .eq('active', true)
-      .order('created_at', {
-        ascending: true,
-      })
-      .limit(1)
-      .maybeSingle();
 
     if (storeError) {
       console.error(
@@ -199,4 +167,17 @@ export async function getCurrentContext(
     initials,
     companyName,
   };
+}
+
+export function getCurrentContext(
+  supabase: SupabaseClient = createClient(),
+): Promise<CurrentContext | null> {
+  const cached = contextCache.get(supabase);
+  if (cached) return cached;
+  const pending = loadCurrentContext(supabase).catch((error) => {
+    contextCache.delete(supabase);
+    throw error;
+  });
+  contextCache.set(supabase, pending);
+  return pending;
 }

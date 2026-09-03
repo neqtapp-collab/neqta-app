@@ -23,9 +23,10 @@ import {
 
 import { routes } from '@/config/routes';
 import { createClient } from '@/lib/supabase/client';
-import { loadSettingsFromSupabase, saveSettings } from '@/lib/settings';
+import { invalidateSettingsCache, loadSettingsFromSupabase, saveSettings } from '@/lib/settings';
 import {
   getCurrentContext,
+  invalidateCurrentContext,
   type CurrentContext,
 } from '@/lib/supabase/current-context';
 
@@ -390,6 +391,8 @@ export function AppShell({
     }
 
     setCurrentContext(null);
+    invalidateCurrentContext();
+    invalidateSettingsCache();
 
     router.replace('/login');
     router.refresh();

@@ -5,18 +5,19 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowRight, Check, MoreHorizontal, Plus, Search, X } from 'lucide-react';
 import { buttonClass } from '@/components/Button';
-import { commercialRound, formatPercent, marginForChannel, money, parseBRL, recommendedPriceForChannel } from '@/lib/financial';
+import { buildPricingCost, commercialRound, formatPercent, marginForChannel, money, parseBRL, pricingCompleteness, recommendedPriceForChannel } from '@/lib/financial';
 import { routes } from '@/config/routes';
 import { defaultSettings, loadSettingsFromSupabase } from '@/lib/settings';
 import type { NeqtaSettings } from '@/types/settings';
 import type { Product, ProductStatus } from '@/types/product';
+import type { StructureCost } from '@/types/cost';
 import { productsService } from '@/services/products.service';
 
 type Filter='all'|'healthy'|'warning'|'critical'|'recommended';
 const labels:Record<ProductStatus,string>={healthy:'Saudável',warning:'Atenção',critical:'Crítico',recipe:'Receita-base'};
 const filters:Array<[Filter,string]>=[['all','Todos'],['healthy','Saudáveis'],['warning','Atenção'],['critical','Críticos'],['recommended','Com recomendação']];
 
-export function PricingPage({initialProducts,initialProductId}:{initialProducts:Product[];initialProductId?:string}){
+export function PricingPage({initialProducts,initialProductId,monthlyOverhead=0,selectiveCosts=[],directLaborHourlyCost=0}:{initialProducts:Product[];initialProductId?:string;monthlyOverhead?:number;selectiveCosts?:StructureCost[];directLaborHourlyCost?:number}){
   const base=initialProducts.filter(product=>product.status!=='recipe');
   const [products,setProducts]=useState(base);
   const [query,setQuery]=useState('');
@@ -41,7 +42,7 @@ export function PricingPage({initialProducts,initialProductId}:{initialProducts:
       {visible.length===0?<Empty title="Nenhum produto encontrado." text="Revise a busca ou os filtros aplicados." action="Limpar filtros" onClick={()=>{setQuery('');setFilter('all')}}/>:<><PricingTable products={visible} open={openSimulation} action={action} setAction={setAction} apply={applyRecommendation}/><PricingCards products={visible} open={openSimulation}/></>}
     </>}
     {picker&&<ProductPicker products={products} close={()=>setPicker(false)} choose={product=>{setPicker(false);setSelected(product)}}/>}
-    {selected&&<PricingDrawer product={selected} settings={settings} close={()=>setSelected(null)} apply={persist}/>} 
+    {selected&&<PricingDrawer product={selected} settings={settings} monthlyOverhead={monthlyOverhead} selectiveCosts={selectiveCosts} directLaborHourlyCost={directLaborHourlyCost} close={()=>setSelected(null)} apply={persist}/>} 
     {toast&&<div className="app-toast"><span><Check/>{toast}</span><button onClick={()=>setToast('')} aria-label="Fechar"><X/></button></div>}
   </section>;
 }
@@ -58,22 +59,28 @@ function PricingCards({products,open}:{products:Product[];open:(p:Product)=>void
 function Status({status}:{status:ProductStatus}){return <span className={`status-badge ${status}`}>{labels[status]}</span>}
 function Empty({title,text,href,action,onClick}:{title:string;text:string;href?:string;action:string;onClick?:()=>void}){return <section className="card pricing-empty"><h2>{title}</h2><p>{text}</p>{href?<Link className={buttonClass('primary')} href={href}>{action}</Link>:<button className={buttonClass('secondary')} onClick={onClick}>{action}</button>}</section>}
 
-function PricingDrawer({product,settings,close,apply}:{product:Product;settings:NeqtaSettings;close:()=>void;apply:(p:Product)=>void}){
+function PricingDrawer({product,settings,monthlyOverhead,selectiveCosts,directLaborHourlyCost,close,apply}:{product:Product;settings:NeqtaSettings;monthlyOverhead:number;selectiveCosts:StructureCost[];directLaborHourlyCost:number;close:()=>void;apply:(p:Product)=>void}){
   const target=settings.financial.targetMargin||product.targetMargin||30;
-  const embeddedFees=product.currentPrice>0?Math.max(0,100-(product.variableCost/product.currentPrice*100)-product.projectedMargin):0;
-  const mathematical=recommendedPriceForChannel(product.variableCost,target,embeddedFees);
+  const intensityWeight={low:.5,medium:1,high:1.5}as const;const selectedUtilityMonthly=(product.utilityUsages??[]).reduce((total,usage)=>total+(selectiveCosts.find(item=>item.id===usage.costId)?.monthlyValue??0)*intensityWeight[usage.intensity],0);
+  const costModel=buildPricingCost({directCost:product.variableCost,directOperationalCost:product.directOperationalCost,laborMinutes:product.laborMinutes,directLaborHourlyCost,monthlyOverhead:monthlyOverhead+selectedUtilityMonthly,estimatedMonthlyRevenue:settings.financial.estimatedMonthlyRevenue,operationalReserve:settings.financial.operationalReserve});
+  const effectiveCost=costModel.unitCost;
+  const embeddedFees=settings.financial.salesTax+settings.financial.operationalReserve+costModel.overheadRate;
+  const mathematical=recommendedPriceForChannel(effectiveCost,target,embeddedFees);
   const targetPrice=commercialRound(mathematical);
   const recommended=Math.max(targetPrice,product.recommendedPrice>product.currentPrice?product.recommendedPrice:0);
   const [price,setPrice]=useState(recommended);
-  const margin=marginForChannel(price,product.variableCost,embeddedFees)??0;
-  const contribution=Math.max(0,price-product.variableCost-(price*embeddedFees/100));
+  const margin=marginForChannel(price,effectiveCost,embeddedFees)??0;
+  const contribution=Math.max(0,price-effectiveCost-(price*embeddedFees/100));
   const changed=Math.abs(price-product.currentPrice)>.001;
   const status=statusFor(margin,target);
-  const defaultPayment=settings.payments.find(payment=>payment.active);
-  const channelRows=settings.channels.filter(channel=>channel.active).map(channel=>{const paymentFee=channel.processesPayment?0:(defaultPayment?.percentageFee??0);const fixedFee=channel.fixedFee+(channel.processesPayment?0:(defaultPayment?.fixedFee??0));const totalFees=embeddedFees+channel.percentageFee+paymentFee+settings.financial.salesTax;const raw=recommendedPriceForChannel(product.variableCost,target,totalFees,fixedFee);const suggested=commercialRound(raw);return{id:channel.id,name:channel.name,fee:channel.percentageFee,suggested,margin:marginForChannel(suggested,product.variableCost,totalFees,fixedFee)??0}});
+  const activePayments=settings.payments.filter(payment=>payment.active);
+  const defaultPayment=settings.financial.paymentFeeStrategy==='highest'?activePayments.sort((a,b)=>(b.percentageFee+b.anticipationFee)-(a.percentageFee+a.anticipationFee)||b.fixedFee-a.fixedFee)[0]:activePayments[0];
+  const minimumPrice=commercialRound(recommendedPriceForChannel(effectiveCost,settings.financial.minimumMargin,embeddedFees));
+  const completeness=pricingCompleteness({directCost:product.variableCost,monthlyOverhead,estimatedMonthlyRevenue:settings.financial.estimatedMonthlyRevenue});
+  const channelRows=settings.channels.filter(channel=>channel.active).map(channel=>{const paymentFee=channel.processesPayment?0:(defaultPayment?.percentageFee??0)+(defaultPayment?.anticipationFee??0);const fixedFee=channel.fixedFee+(channel.processesPayment?0:(defaultPayment?.fixedFee??0));const totalFees=embeddedFees+channel.percentageFee+paymentFee;const raw=recommendedPriceForChannel(effectiveCost,target,totalFees,fixedFee);const suggested=commercialRound(raw);return{id:channel.id,name:channel.name,fee:channel.percentageFee+paymentFee,suggested,margin:marginForChannel(suggested,effectiveCost,totalFees,fixedFee)??0}});
   return createPortal(<div className="product-overlay pricing-overlay" onMouseDown={event=>event.target===event.currentTarget&&close()}><section className="product-drawer pricing-drawer" role="dialog" aria-modal="true" aria-label="Simular preço"><header><div><h2>Simular preço</h2><p>{product.name} · {product.category}</p></div><button onClick={close} aria-label="Fechar"><X/></button></header><div className="product-drawer-content pricing-drawer-content">
-    <section className="pricing-current"><span>Custo variável<b>{money(product.variableCost)}</b></span><span>Preço atual<b>{money(product.currentPrice)}</b></span><span>Margem projetada<b>{formatPercent(product.projectedMargin)}</b></span><span>Meta da empresa<b>{formatPercent(target)}</b></span></section>
-    <section className="pricing-reference"><h3>Preços de referência</h3><div><span>Preço mínimo<b>—</b><small>Respeita a margem mínima configurada.</small></span><span>Preço para meta<b>{money(targetPrice)}</b><small>Necessário para alcançar a meta da empresa.</small></span><span className="featured">Preço recomendado<b>{money(recommended)}</b><small>Sugestão final da NEQTA.</small></span></div><p className="pricing-reference-note"><b>Por que este preço?</b> Considera custos, meta de margem, taxas dos canais e arredondamento comercial.</p><Link href={routes.settings}>Complete suas informações financeiras · Ir para Configurações</Link></section>
+    <section className="pricing-current"><span>Custo direto<b>{money(product.variableCost)}</b></span><span>Mão de obra direta<b>{money(costModel.laborCost)}</b></span><span>Rateio mensal<b>{formatPercent(costModel.overheadRate)}</b></span><span>Completude dos dados<b>{completeness}%</b></span></section>
+    <section className="pricing-reference"><h3>Preços de referência</h3><div><span>Preço mínimo<b>{money(minimumPrice)}</b><small>Respeita a margem mínima configurada.</small></span><span>Preço sustentável<b>{money(targetPrice)}</b><small>Cobre custos, rateio e meta da empresa.</small></span><span className="featured">Preço recomendado<b>{money(recommended)}</b><small>Sugestão final com arredondamento comercial.</small></span></div><p className="pricing-reference-note"><b>Por que este preço?</b> Considera ficha técnica, custos diretos, mão de obra, despesas mensais, perdas, impostos, taxas e margem. {defaultPayment&&settings.financial.paymentFeeStrategy==='highest'?`Para venda direta, usa de forma conservadora a maior taxa ativa: ${defaultPayment.name}.`:''}</p>{completeness<100&&<Link href={routes.settings}>Complete receita e custos mensais para aumentar a precisão · Ir para Configurações</Link>}</section>
     <section className="pricing-simulator"><h3>Simular novo preço</h3><label>Preço-base simulado<input aria-label="Preço-base simulado" value={price?money(price):''} inputMode="numeric" onChange={event=>setPrice(parseBRL(event.target.value))}/><small>Usado como referência para calcular os preços recomendados em cada canal.</small></label><div className="simulation-result"><div className="simulation-margin"><span>Nova margem projetada</span><strong>{formatPercent(margin)}</strong><Status status={status}/></div><p className={margin-product.projectedMargin>=0?'success-text':'danger-text'}>{margin-product.projectedMargin>=0?'+':''}{(margin-product.projectedMargin).toFixed(1).replace('.',',')} p.p. em relação ao preço atual</p><span className="simulation-contribution">Contribuição estimada por unidade<b>{money(contribution)}</b></span></div><div className="pricing-comparison"><span>Atual <b>{money(product.currentPrice)}</b></span><ArrowRight/><span>Simulado <b>{money(price)}</b></span></div></section>
     <section className="pricing-channels"><h3>Preços recomendados por canal</h3><p>Ajustados pelas taxas configuradas em cada canal.</p><div>{channelRows.map(channel=><article key={channel.id}><span><span className="channel-title"><b>{channel.name}</b>{channel.id==='store'&&<em>Principal</em>}</span><small>{channel.fee?`Taxas ${channel.fee}%`:'Sem taxa'}</small></span><span><small>Preço recomendado</small><b>{money(channel.suggested)}</b></span><span><small>Margem projetada</small><b>{formatPercent(channel.margin)}</b></span></article>)}</div></section>
   </div><footer className="pricing-drawer-footer"><span>{money(product.currentPrice)} <ArrowRight/> <b>{money(price)}</b></span><button className={buttonClass('primary')} disabled={!changed||price<=0} onClick={()=>apply({...product,currentPrice:price,projectedMargin:margin,recommendedPrice:price>=recommended?price:recommended,status})}>Atualizar preço na NEQTA</button></footer></section></div>,document.body);
