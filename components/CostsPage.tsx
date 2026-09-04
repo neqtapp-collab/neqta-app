@@ -1991,8 +1991,16 @@ function ImprovedItemDrawer({
             </div>
           )}
           <div className="calculated-cost">
-            <span>Custo calculado</span>
-            <strong>{base ? `${money(base)}/${unit}` : "—"}</strong>
+            <span>Custo que entra nos produtos</span>
+            <strong>
+              {effective ? `${money(effective)}/${effectiveUnit}` : "—"}
+            </strong>
+            {commercialPackage && base > 0 && (
+              <small>
+                Compra: {money(base)}/{unit} · convertido automaticamente pelo
+                conteúdo informado.
+              </small>
+            )}
           </div>
           <button
             type="button"
@@ -2060,11 +2068,11 @@ function ImprovedItemDrawer({
                   onChange={(e) => setNotes(e.target.value)}
                 />
               </label>
-              {(hasAdvanced || commercialPackage) && (
+              {hasAdvanced && !commercialPackage && (
                 <div className="effective-cost">
                   <Info />
                   <span>
-                    Custo base
+                    Custo da compra
                     <strong>
                       {money(base)}/{unit}
                     </strong>
