@@ -45,4 +45,33 @@ describe("avaliação unificada de precificação", () => {
     expect(result.product.recommendedPrice).toBe(41.9);
     expect(result.product.status).toBe("critical");
   });
+
+  it("bloqueia recomendação quando a composição usa valores simbólicos", () => {
+    const settings = {
+      ...defaultSettings,
+      financial: {
+        ...defaultSettings.financial,
+        estimatedMonthlyRevenue: 50_000,
+      },
+    };
+    const suspiciousProduct: Product = {
+      ...product,
+      variableCost: 0.04,
+      currentPrice: 25,
+      laborMinutes: 0,
+      directOperationalCost: 0,
+      components: [
+        { id: "1", name: "Mussarela", quantity: 1, unit: "g", unitCost: 0.04 },
+        { id: "2", name: "Tomate", quantity: 1, unit: "g", unitCost: 0.001 },
+        { id: "3", name: "Orégano", quantity: 1, unit: "g", unitCost: 0.001 },
+      ],
+    };
+
+    const result = evaluateProductPricing(suspiciousProduct, settings, 4500);
+
+    expect(result.suspiciousComposition).toBe(true);
+    expect(result.completeness).toBe(67);
+    expect(result.product.status).toBe("critical");
+    expect(result.product.recommendedPrice).toBe(0);
+  });
 });

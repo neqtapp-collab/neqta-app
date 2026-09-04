@@ -11,6 +11,27 @@ import {
 
 const intensityWeight = { low: 0.5, medium: 1, high: 1.5 } as const;
 
+function hasSuspiciousComposition(product: Product) {
+  const components = product.components ?? [];
+  if (components.length < 2 || product.currentPrice <= 0) return false;
+
+  const directCostRatio = product.variableCost / product.currentPrice;
+  const measuredQuantity = components.reduce((total, component) => {
+    const unit = component.unit.toLowerCase();
+    if (unit === "kg" || unit === "l") return total + component.quantity * 1000;
+    if (unit === "g" || unit === "ml") return total + component.quantity;
+    return total;
+  }, 0);
+  const measuredComponents = components.filter((component) =>
+    ["kg", "g", "l", "ml"].includes(component.unit.toLowerCase()),
+  ).length;
+
+  return (
+    directCostRatio < 0.01 ||
+    (measuredComponents >= 2 && measuredQuantity > 0 && measuredQuantity <= 5)
+  );
+}
+
 export function pricingStatus(margin: number, target: number): ProductStatus {
   return margin < target - 8
     ? "critical"
@@ -43,11 +64,15 @@ export function evaluateProductPricing(
     monthlyOverhead: allocatedOverhead,
     estimatedMonthlyRevenue: settings.financial.estimatedMonthlyRevenue,
   });
-  const completeness = pricingCompleteness({
+  const baseCompleteness = pricingCompleteness({
     directCost: product.variableCost,
     monthlyOverhead: allocatedOverhead,
     estimatedMonthlyRevenue: settings.financial.estimatedMonthlyRevenue,
   });
+  const suspiciousComposition = hasSuspiciousComposition(product);
+  const completeness = suspiciousComposition
+    ? Math.min(baseCompleteness, 67)
+    : baseCompleteness;
   const embeddedFees =
     settings.financial.salesTax +
     settings.financial.operationalReserve +
@@ -60,6 +85,7 @@ export function evaluateProductPricing(
       overheadRate: model.overheadRate,
       embeddedFees,
       completeness,
+      suspiciousComposition,
     };
   if (completeness < 100 || model.unitCost <= 0)
     return {
@@ -74,6 +100,7 @@ export function evaluateProductPricing(
       overheadRate: model.overheadRate,
       embeddedFees,
       completeness,
+      suspiciousComposition,
     };
   const target = settings.financial.targetMargin || product.targetMargin || 30;
   const margin =
@@ -93,6 +120,7 @@ export function evaluateProductPricing(
     overheadRate: model.overheadRate,
     embeddedFees,
     completeness,
+    suspiciousComposition,
   };
 }
 
