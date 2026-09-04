@@ -12,8 +12,11 @@ import { productsService } from '@/services/products.service';
 import { promotionDismissalsService, promotionsService } from '@/services/promotions.service';
 import { routes } from '@/config/routes';
 import { defaultSettings, loadSettingsFromSupabase } from '@/lib/settings';
+import { evaluateProductPricing } from '@/lib/pricing-evaluation';
+import { evaluatePromotionScenario, promotionSafeLimit, promotionStatus } from '@/lib/promotion-evaluation';
 import type { NeqtaSettings } from '@/types/settings';
 import type { Product } from '@/types/product';
+import type { StructureCost } from '@/types/cost';
 import type { Promotion, PromotionSource, PromotionStatus, PromotionType } from '@/types/promotion';
 
 type Filter = 'all' | 'neqta' | 'manual' | 'active' | 'ended';
@@ -39,27 +42,13 @@ const typeLabels: Record<PromotionType, string> = {
   combo: 'Combo',
 };
 
-function embeddedFees(product: Product) {
-  return product.currentPrice > 0
-    ? Math.max(0, 100 - (product.variableCost / product.currentPrice) * 100 - product.projectedMargin)
-    : 0;
-}
-
 function safeLimit(product: Product, minimumMargin = 25) {
-  const divisor = 1 - minimumMargin / 100 - embeddedFees(product) / 100;
-  if (product.variableCost <= 0 || product.currentPrice <= 0 || divisor <= 0) return { minimumPrice: product.currentPrice, maxDiscount: 0 };
-  const minimumPrice = product.variableCost / divisor;
-  return { minimumPrice, maxDiscount: Math.max(0, (1 - minimumPrice / product.currentPrice) * 100) };
+  const result = promotionSafeLimit(product, minimumMargin);
+  return { minimumPrice: result.minimumPrice, maxDiscount: result.maxDiscount };
 }
 
 function commercialDiscount(maximum: number) {
   return [20, 15, 10, 5].find((value) => value <= maximum) ?? 0;
-}
-
-function statusFor(margin: number, minimumMargin = 25): PromotionStatus {
-  if (margin < minimumMargin) return 'unsafe';
-  if (margin < minimumMargin + 3) return 'warning';
-  return 'safe';
 }
 
 function sourceLabel(source: PromotionSource) {
@@ -70,28 +59,7 @@ function evaluatePromotion(product: Product, promotion: Pick<Promotion, 'promoti
   const secondaryProduct = promotion.type === 'combo'
     ? products.find((item) => item.id === promotion.secondaryProductId)
     : undefined;
-  const promotionalPrice = promotion.promotionalPrice;
-  const referencePrice = product.currentPrice + (secondaryProduct?.currentPrice ?? 0);
-  const consideredCost = product.variableCost + (secondaryProduct?.variableCost ?? 0);
-  const incompleteCost = product.variableCost <= 0 || Boolean(secondaryProduct && secondaryProduct.variableCost <= 0);
-  const feeAmount = product.currentPrice * embeddedFees(product) / 100
-    + (secondaryProduct ? secondaryProduct.currentPrice * embeddedFees(secondaryProduct) / 100 : 0);
-  const fees = referencePrice > 0 ? feeAmount / referencePrice * 100 : 0;
-  const financialReference = { ...product, currentPrice: referencePrice, variableCost: consideredCost, projectedMargin: 100 - consideredCost / referencePrice * 100 - fees };
-  const margin = marginForChannel(promotionalPrice, consideredCost, fees) ?? 0;
-  const contribution = promotionalPrice - consideredCost - promotionalPrice * fees / 100;
-  const limit = safeLimit(financialReference, minimumMargin);
-  const equivalentDiscount = referencePrice > 0
-    ? Math.max(0, (1 - promotionalPrice / referencePrice) * 100)
-    : 0;
-  const classification = incompleteCost ? 'unsafe' : statusFor(margin, minimumMargin);
-  const valid = !incompleteCost
-    && margin >= minimumMargin
-    && contribution > 0
-    && promotionalPrice > consideredCost
-    && classification !== 'unsafe'
-    && equivalentDiscount <= limit.maxDiscount + 0.001;
-  return { margin, contribution, classification, valid };
+  return evaluatePromotionScenario(product, promotion.promotionalPrice, minimumMargin, secondaryProduct);
 }
 
 function suggestionSignature(parts: Array<string | number | undefined>) {
@@ -155,10 +123,9 @@ function opportunitySuggestions(products: Product[], minimumMargin: number) {
       charmPrice < product.currentPrice ? buildSuggestion(product, 'price', charmPrice, minimumMargin, products) : null,
       buildSuggestion(product, 'take2', targetPrice, minimumMargin, products),
       ...products.filter((secondary) => secondary.id !== product.id).map((secondary) => {
-        const combined = { ...product, currentPrice: product.currentPrice + secondary.currentPrice, variableCost: product.variableCost + secondary.variableCost };
         const comboDiscount = commercialDiscount(Math.min(limit.maxDiscount, safeLimit(secondary, minimumMargin).maxDiscount));
         return comboDiscount
-          ? buildSuggestion(product, 'combo', combined.currentPrice * (1 - comboDiscount / 100), minimumMargin, products, secondary.id)
+          ? buildSuggestion(product, 'combo', (product.currentPrice + secondary.currentPrice) * (1 - comboDiscount / 100), minimumMargin, products, secondary.id)
           : null;
       }),
     ];
@@ -174,8 +141,8 @@ function opportunitySuggestions(products: Product[], minimumMargin: number) {
   });
 }
 
-export function PromotionsPage({ initialProducts, initialPromotions, initialDismissedSuggestionIds = [] }: { initialProducts: Product[]; initialPromotions: Promotion[]; initialDismissedSuggestionIds?: string[] }) {
-  const [products,setProducts]=useState(initialProducts.filter((product) => product.status !== 'recipe'));
+export function PromotionsPage({ initialProducts, initialPromotions, initialDismissedSuggestionIds = [], initialSettings = defaultSettings, monthlyOverhead = 0, selectiveCosts = [], directLaborHourlyCost = 0 }: { initialProducts: Product[]; initialPromotions: Promotion[]; initialDismissedSuggestionIds?: string[]; initialSettings?: NeqtaSettings; monthlyOverhead?: number; selectiveCosts?: StructureCost[]; directLaborHourlyCost?: number }) {
+  const [rawProducts,setProducts]=useState(initialProducts.filter((product) => product.status !== 'recipe'));
   const [saved, setSaved] = useState<Promotion[]>(initialPromotions);
   const [dismissedSuggestionIds, setDismissedSuggestionIds] = useState(initialDismissedSuggestionIds);
   const [query, setQuery] = useState('');
@@ -185,7 +152,9 @@ export function PromotionsPage({ initialProducts, initialPromotions, initialDism
   const [deleting, setDeleting] = useState<Promotion | null>(null);
   const [menu, setMenu] = useState<string | null>(null);
   const [toast, setToast] = useState('');
-  const [settings,setSettings]=useState<NeqtaSettings>(defaultSettings);
+  const [settings,setSettings]=useState<NeqtaSettings>(initialSettings);
+
+  const products = useMemo(() => rawProducts.map((product) => evaluateProductPricing(product, settings, monthlyOverhead, selectiveCosts, directLaborHourlyCost).product), [rawProducts, settings, monthlyOverhead, selectiveCosts, directLaborHourlyCost]);
 
   useEffect(()=>{void loadSettingsFromSupabase().then(setSettings);const sync=(event:Event)=>setSettings((event as CustomEvent<NeqtaSettings>).detail);window.addEventListener('neqta-settings-updated',sync);return()=>window.removeEventListener('neqta-settings-updated',sync)},[]);
   useEffect(()=>{void productsService.list().then(rows=>setProducts(rows.filter(product=>product.status!=='recipe')));const sync=(event:Event)=>setProducts(((event as CustomEvent<Product[]>).detail??[]).filter(product=>product.status!=='recipe'));window.addEventListener('neqta-products-updated',sync);return()=>window.removeEventListener('neqta-products-updated',sync)},[]);
@@ -409,7 +378,7 @@ function PromotionDrawer({ product, products, settings, initial, source, close, 
   const limit = safeLimit(product,minimumMargin);
   const suggestionDiscount = commercialDiscount(limit.maxDiscount);
   const suggestionPrice = product.currentPrice * (1 - suggestionDiscount / 100);
-  const suggestionMargin = marginForChannel(suggestionPrice, product.variableCost, embeddedFees(product)) ?? 0;
+  const suggestionMargin = evaluatePromotionScenario(product, suggestionPrice, minimumMargin).margin;
   const [type, setType] = useState<PromotionType>(initial?.type ?? 'percentage');
   const [value, setValue] = useState(() => {
     if (!initial) return 0;
@@ -425,15 +394,7 @@ function PromotionDrawer({ product, products, settings, initial, source, close, 
 
   const secondaryProduct = type === 'combo' ? products.find((item) => item.id === secondaryProductId) : undefined;
   const referencePrice = product.currentPrice + (secondaryProduct?.currentPrice ?? 0);
-  const consideredCost = product.variableCost + (secondaryProduct?.variableCost ?? 0);
-  const incompleteCost = product.variableCost <= 0 || Boolean(secondaryProduct && secondaryProduct.variableCost <= 0);
-  const embeddedFeeAmount = product.currentPrice * embeddedFees(product) / 100
-    + (secondaryProduct ? secondaryProduct.currentPrice * embeddedFees(secondaryProduct) / 100 : 0);
-  const combinedEmbeddedFees = referencePrice > 0 ? embeddedFeeAmount / referencePrice * 100 : 0;
-  const financialReference = type === 'combo' && secondaryProduct
-    ? { ...product, currentPrice: referencePrice, variableCost: consideredCost }
-    : product;
-  const activeLimit = safeLimit(financialReference, minimumMargin);
+  const activeLimit = promotionSafeLimit(product, minimumMargin, secondaryProduct);
 
   let promotionalPrice = type === 'percentage'
     ? referencePrice * (1 - value / 100)
@@ -444,19 +405,23 @@ function PromotionDrawer({ product, products, settings, initial, source, close, 
         : value;
   promotionalPrice = Math.max(0, promotionalPrice);
 
-  const equivalentDiscount = referencePrice > 0 ? Math.max(0, (1 - promotionalPrice / referencePrice) * 100) : 0;
-  const margin = marginForChannel(promotionalPrice, consideredCost, combinedEmbeddedFees) ?? 0;
-  const contribution = promotionalPrice - consideredCost - promotionalPrice * combinedEmbeddedFees / 100;
-  const status = incompleteCost ? 'unsafe' : statusFor(margin,minimumMargin);
-  const noSpace = limit.maxDiscount < 1;
+  const evaluation = evaluatePromotionScenario(product, promotionalPrice, minimumMargin, secondaryProduct);
+  const { consideredCost, equivalentDiscount, margin, contribution } = evaluation;
+  const noSpace = activeLimit.maxDiscount < 1;
   const dateValid = !startDate || !endDate || endDate >= startDate;
-  const financiallyValid = !incompleteCost && margin >= minimumMargin && contribution > 0 && promotionalPrice > consideredCost && status !== 'unsafe' && equivalentDiscount <= activeLimit.maxDiscount + 0.001;
-  const valid = !noSpace && promotionalPrice > 0 && equivalentDiscount > 0 && financiallyValid && selectedChannels.length > 0 && dateValid && (type !== 'combo' || !!secondaryProduct);
   const availableChannels=settings.channels.filter(channel=>channel.active);
+  const activePayments=settings.payments.filter(payment=>payment.active);
+  const fallbackPayment=activePayments.sort((a,b)=>(b.percentageFee+b.anticipationFee)-(a.percentageFee+a.anticipationFee)||b.fixedFee-a.fixedFee)[0];
   const channelRows = availableChannels.filter((channel) => selectedChannels.includes(channel.id)).map((channel) => {
-    const fee=channel.percentageFee+settings.financial.salesTax;const channelPrice = fee ? promotionalPrice / (1 - fee / 100) : promotionalPrice;
-    return { ...channel, fee, price: channelPrice, margin: marginForChannel(channelPrice, consideredCost, combinedEmbeddedFees + fee,channel.fixedFee) ?? 0 };
+    const paymentFee=channel.processesPayment?0:(fallbackPayment?.percentageFee??0)+(fallbackPayment?.anticipationFee??0);
+    const paymentFixedFee=channel.processesPayment?0:(fallbackPayment?.fixedFee??0);
+    const fee=channel.percentageFee+paymentFee;
+    return { ...channel, fee, price: promotionalPrice, margin: evaluation.dataReady ? marginForChannel(promotionalPrice, consideredCost, evaluation.percentageFees + fee,channel.fixedFee+paymentFixedFee) ?? 0 : 0 };
   });
+  const channelsValid=channelRows.every((channel)=>channel.margin>=minimumMargin);
+  const financiallyValid=evaluation.valid&&channelsValid&&equivalentDiscount<=activeLimit.maxDiscount+0.001;
+  const status=!evaluation.dataReady||!channelsValid?'unsafe':promotionStatus(margin,minimumMargin);
+  const valid = !noSpace && promotionalPrice > 0 && equivalentDiscount > 0 && financiallyValid && selectedChannels.length > 0 && dateValid && (type !== 'combo' || !!secondaryProduct);
 
   function toggleChannel(id: string) {
     setChannels((current) => {
@@ -471,8 +436,8 @@ function PromotionDrawer({ product, products, settings, initial, source, close, 
   }
 
   return createPortal(<div className="product-overlay promotion-overlay" onMouseDown={(event) => event.target === event.currentTarget && close()}><section className="product-drawer promotion-drawer" role="dialog" aria-modal="true" aria-label="Criar promoção"><header><div><h2>Criar promoção</h2><p>{product.name} · {product.category}</p></div><button onClick={close} aria-label="Fechar"><X /></button></header><div className="product-drawer-content promotion-drawer-content">
-    <section className="promotion-current"><span>Custo variável<b>{money(product.variableCost)}</b></span><span>Preço atual<b>{money(product.currentPrice)}</b></span><span>Margem projetada<b>{formatPercent(product.projectedMargin)}</b></span><span>Margem mínima configurada<b>{formatPercent(minimumMargin)}</b></span></section>
-    {noSpace && <section className="promotion-alert"><b>Este produto não possui margem disponível para desconto.</b><p>Revise o preço antes de criar uma promoção.</p><Link href={`${routes.pricing}?produto=${product.id}`}>Ir para Precificação</Link></section>}
+    <section className="promotion-current"><span>Custo efetivo<b>{money(product.pricingEffectiveCost ?? product.variableCost)}</b></span><span>Preço atual<b>{money(product.currentPrice)}</b></span><span>Margem operacional estimada<b>{formatPercent(product.projectedMargin)}</b></span><span>Margem mínima configurada<b>{formatPercent(minimumMargin)}</b></span></section>
+    {noSpace && <section className="promotion-alert"><b>{(product.pricingCompleteness ?? 0) < 100 ? 'Complete a ficha técnica antes de criar uma promoção.' : 'Este produto não possui margem disponível para desconto.'}</b><p>{(product.pricingCompleteness ?? 0) < 100 ? 'A NEQTA não sugere descontos enquanto os custos não forem confiáveis.' : 'Revise o preço antes de criar uma promoção.'}</p><Link href={(product.pricingCompleteness ?? 0) < 100 ? routes.product(product.id) : routes.pricingProduct(product.id)}>{(product.pricingCompleteness ?? 0) < 100 ? 'Revisar ficha técnica' : 'Ir para Precificação'}</Link></section>}
     {!noSpace && suggestionDiscount > 0 && <section className="promotion-suggestion"><div><small>Sugestão NEQTA</small><strong>{suggestionDiscount}% OFF</strong><span>{money(product.currentPrice)} <ArrowRight /> {money(suggestionPrice)}</span><p>Margem após promoção: <b>{formatPercent(suggestionMargin)}</b></p></div><button className={`${buttonClass('ghost')} promotion-apply-suggestion`} onClick={applySuggestion}>Aplicar sugestão</button></section>}
     {!noSpace && <><section className="promotion-builder"><h3>Simular promoção</h3><label>Tipo de promoção<CustomSelect value={type} onChange={(next) => { const nextType = next as PromotionType; setType(nextType); setValue(0); if (nextType !== 'combo') setSecondaryProductId(''); }} ariaLabel="Tipo de promoção" options={(Object.keys(typeLabels) as PromotionType[]).map((key) => ({ value: key, label: typeLabels[key] }))} /></label>{type === 'combo' && <label>Produto adicional<CustomSelect value={secondaryProductId} onChange={setSecondaryProductId} ariaLabel="Produto adicional do combo" placeholder="Selecione um produto..." options={products.filter((item) => item.id !== product.id).map((item) => ({ value: item.id, label: `${item.name} · ${money(item.currentPrice)}` }))} /><small>O produto principal ({product.name}) já faz parte do combo. A lista mostra todos os outros produtos disponíveis.</small></label>}<label>{type === 'percentage' ? 'Desconto (%)' : type === 'fixed' ? 'Desconto (R$)' : type === 'take2' ? 'Preço total para 2 unidades' : type === 'combo' ? 'Preço do combo' : 'Preço promocional'}<input inputMode="decimal" value={type === 'percentage' ? value || '' : value ? money(value) : ''} onChange={(event) => setValue(type === 'percentage' ? parsePercent(event.target.value) : parseBRL(event.target.value))} /></label>
       <div className="promotion-result"><span className="promotion-result-primary">Preço promocional<b>{money(promotionalPrice)}</b></span><span className="promotion-result-primary">Margem após promoção<b>{formatPercent(margin)}</b></span><span>Desconto<b>{formatPercent(equivalentDiscount)}</b></span><span>Desconto máximo seguro<b>{formatPercent(activeLimit.maxDiscount)}</b></span><span>Contribuição estimada por unidade<b>{money(Math.max(0, contribution))}</b></span><span>Classificação<PromotionStatusBadge status={status} /></span></div>

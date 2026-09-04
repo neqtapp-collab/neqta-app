@@ -57,6 +57,8 @@ export interface Product {
   coveragePrice?: number;
   sustainablePrice?: number;
   pricingFormulaVersion?: string;
+  pricingEffectiveCost?: number;
+  pricingEmbeddedFees?: number;
 }
 
 export interface CreateProductDTO {

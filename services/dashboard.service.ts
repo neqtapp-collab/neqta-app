@@ -13,20 +13,9 @@ import {
   buildPricingContext,
   evaluateProductPricing,
 } from "@/lib/pricing-evaluation";
+import { promotionSafeLimit } from "@/lib/promotion-evaluation";
 export interface DashboardService {
   getOverview(client?: SupabaseClient): Promise<DashboardOverviewResponse>;
-}
-function safeDiscount(
-  cost: number,
-  price: number,
-  margin: number,
-  minimum: number,
-) {
-  if (cost <= 0 || price <= 0) return 0;
-  const fees = Math.max(0, 100 - (cost / price) * 100 - margin);
-  const divisor = 1 - minimum / 100 - fees / 100;
-  if (divisor <= 0) return 0;
-  return Math.max(0, (1 - cost / divisor / price) * 100);
 }
 export const dashboardService: DashboardService = {
   async getOverview(client) {
@@ -58,13 +47,10 @@ export const dashboardService: DashboardService = {
     const priority = [...critical, ...warning].sort(
       (a, b) => a.projectedMargin - b.projectedMargin,
     )[0];
-    const discounts = sellableEvaluations.map(({ product, effectiveCost }) =>
-      safeDiscount(
-        effectiveCost,
-        product.currentPrice,
-        product.projectedMargin,
-        settings.financial.minimumMargin,
-      ),
+    const discounts = sellable.map(
+      (product) =>
+        promotionSafeLimit(product, settings.financial.minimumMargin)
+          .maxDiscount,
     );
     const pressuringCosts = costs
       .map((cost) => ({
