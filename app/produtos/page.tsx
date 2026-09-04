@@ -15,7 +15,7 @@ import {
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; view?: string }>;
+  searchParams: Promise<{ status?: string; view?: string; product?: string }>;
 }) {
   const supabase = await createClient();
   const [products, structure, team, settings, params] = await Promise.all([
@@ -42,6 +42,7 @@ export default async function Page({
         initialProducts={evaluated}
         initialStatus={params.status}
         initialView={params.view}
+        initialProductId={params.product}
       />
     </AppShell>
   );

@@ -588,30 +588,37 @@ function PricingDrawer({
     settings.financial.salesTax +
     settings.financial.operationalReserve +
     costModel.overheadRate;
-  const mathematical = recommendedPriceForChannel(
-    effectiveCost,
-    target,
-    embeddedFees,
-  );
+  const completeness =
+    product.pricingCompleteness ??
+    pricingCompleteness({
+      directCost: product.variableCost,
+      monthlyOverhead,
+      estimatedMonthlyRevenue: settings.financial.estimatedMonthlyRevenue,
+    });
+  const pricingReady = completeness === 100 && effectiveCost > 0;
+  const mathematical = pricingReady
+    ? recommendedPriceForChannel(effectiveCost, target, embeddedFees)
+    : 0;
   const targetPrice = commercialRound(mathematical);
-  const recommended = Math.max(
-    targetPrice,
-    product.recommendedPrice > product.currentPrice
-      ? product.recommendedPrice
-      : 0,
-  );
+  const recommended = pricingReady
+    ? Math.max(
+        targetPrice,
+        product.recommendedPrice > product.currentPrice
+          ? product.recommendedPrice
+          : 0,
+      )
+    : 0;
   const [price, setPrice] = useState(recommended);
-  const margin =
-    effectiveCost > 0
-      ? (marginForChannel(price, effectiveCost, embeddedFees) ?? 0)
-      : 0;
-  const contribution = Math.max(
-    0,
-    price - effectiveCost - (price * embeddedFees) / 100,
-  );
+  const margin = pricingReady
+    ? (marginForChannel(price, effectiveCost, embeddedFees) ?? 0)
+    : 0;
+  const contribution = pricingReady
+    ? Math.max(0, price - effectiveCost - (price * embeddedFees) / 100)
+    : 0;
   const changed = Math.abs(price - product.currentPrice) > 0.001;
-  const status: ProductStatus =
-    effectiveCost > 0 ? statusFor(margin, target) : "critical";
+  const status: ProductStatus = pricingReady
+    ? statusFor(margin, target)
+    : "critical";
   const activePayments = settings.payments.filter((payment) => payment.active);
   const defaultPayment =
     settings.financial.paymentFeeStrategy === "highest"
@@ -622,18 +629,15 @@ function PricingDrawer({
               (a.percentageFee + a.anticipationFee) || b.fixedFee - a.fixedFee,
         )[0]
       : activePayments[0];
-  const minimumPrice = commercialRound(
-    recommendedPriceForChannel(
-      effectiveCost,
-      settings.financial.minimumMargin,
-      embeddedFees,
-    ),
-  );
-  const completeness = pricingCompleteness({
-    directCost: product.variableCost,
-    monthlyOverhead,
-    estimatedMonthlyRevenue: settings.financial.estimatedMonthlyRevenue,
-  });
+  const minimumPrice = pricingReady
+    ? commercialRound(
+        recommendedPriceForChannel(
+          effectiveCost,
+          settings.financial.minimumMargin,
+          embeddedFees,
+        ),
+      )
+    : 0;
   const channelRows = settings.channels
     .filter((channel) => channel.active)
     .map((channel) => {
@@ -645,20 +649,19 @@ function PricingDrawer({
         channel.fixedFee +
         (channel.processesPayment ? 0 : (defaultPayment?.fixedFee ?? 0));
       const totalFees = embeddedFees + channel.percentageFee + paymentFee;
-      const raw = recommendedPriceForChannel(
-        effectiveCost,
-        target,
-        totalFees,
-        fixedFee,
-      );
-      const suggested = commercialRound(raw);
+      const raw = pricingReady
+        ? recommendedPriceForChannel(effectiveCost, target, totalFees, fixedFee)
+        : 0;
+      const suggested = pricingReady ? commercialRound(raw) : 0;
       return {
         id: channel.id,
         name: channel.name,
         fee: channel.percentageFee + paymentFee,
         suggested,
-        margin:
-          marginForChannel(suggested, effectiveCost, totalFees, fixedFee) ?? 0,
+        margin: pricingReady
+          ? (marginForChannel(suggested, effectiveCost, totalFees, fixedFee) ??
+            0)
+          : 0,
       };
     });
   return createPortal(
@@ -702,15 +705,17 @@ function PricingDrawer({
             <h3>Preços de referência</h3>
             <div>
               <span>
-                Preço mínimo<b>{money(minimumPrice)}</b>
+                Preço mínimo<b>{pricingReady ? money(minimumPrice) : "—"}</b>
                 <small>Respeita a margem mínima configurada.</small>
               </span>
               <span>
-                Preço sustentável<b>{money(targetPrice)}</b>
+                Preço sustentável
+                <b>{pricingReady ? money(targetPrice) : "—"}</b>
                 <small>Cobre custos, rateio e meta da empresa.</small>
               </span>
               <span className="featured">
-                Preço recomendado<b>{money(recommended)}</b>
+                Preço recomendado
+                <b>{pricingReady ? money(recommended) : "—"}</b>
                 <small>Sugestão final com arredondamento comercial.</small>
               </span>
             </div>
@@ -724,91 +729,124 @@ function PricingDrawer({
                 : ""}
             </p>
             {completeness < 100 && (
-              <Link href={routes.settings}>
-                Complete receita e custos mensais para aumentar a precisão · Ir
-                para Configurações
-              </Link>
+              <div className="pricing-data-warning" role="alert">
+                <b>Revise os dados antes de usar este preço</b>
+                {(product.pricingWarnings ?? []).length > 0 ? (
+                  <ul>
+                    {product.pricingWarnings?.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p>
+                    Informe a receita estimada e os custos mensais da empresa.
+                  </p>
+                )}
+                <Link
+                  href={
+                    (product.pricingWarnings ?? []).length > 0
+                      ? routes.product(product.id)
+                      : routes.settings
+                  }
+                >
+                  {(product.pricingWarnings ?? []).length > 0
+                    ? "Revisar ficha técnica"
+                    : "Completar configurações"}
+                </Link>
+              </div>
             )}
           </section>
-          <section className="pricing-simulator">
-            <h3>Simular novo preço</h3>
-            <label>
-              Preço-base simulado
-              <input
-                aria-label="Preço-base simulado"
-                value={price ? money(price) : ""}
-                inputMode="numeric"
-                onChange={(event) => setPrice(parseBRL(event.target.value))}
-              />
-              <small>
-                Usado como referência para calcular os preços recomendados em
-                cada canal.
-              </small>
-            </label>
-            <div className="simulation-result">
-              <div className="simulation-margin">
-                <span>Nova margem projetada</span>
-                <strong>{formatPercent(margin)}</strong>
-                <Status status={status} />
+          {pricingReady && (
+            <section className="pricing-simulator">
+              <h3>Simular novo preço</h3>
+              <label>
+                Preço-base simulado
+                <input
+                  aria-label="Preço-base simulado"
+                  value={price ? money(price) : ""}
+                  inputMode="numeric"
+                  disabled={!pricingReady}
+                  onChange={(event) => setPrice(parseBRL(event.target.value))}
+                />
+                <small>
+                  Usado como referência para calcular os preços recomendados em
+                  cada canal.
+                </small>
+              </label>
+              <div className="simulation-result">
+                <div className="simulation-margin">
+                  <span>Nova margem projetada</span>
+                  <strong>{formatPercent(margin)}</strong>
+                  <Status status={status} />
+                </div>
+                <p
+                  className={
+                    margin - product.projectedMargin >= 0
+                      ? "success-text"
+                      : "danger-text"
+                  }
+                >
+                  {margin - product.projectedMargin >= 0 ? "+" : ""}
+                  {(margin - product.projectedMargin)
+                    .toFixed(1)
+                    .replace(".", ",")}{" "}
+                  p.p. em relação ao preço atual
+                </p>
+                <span className="simulation-contribution">
+                  Contribuição estimada por unidade<b>{money(contribution)}</b>
+                </span>
               </div>
-              <p
-                className={
-                  margin - product.projectedMargin >= 0
-                    ? "success-text"
-                    : "danger-text"
-                }
-              >
-                {margin - product.projectedMargin >= 0 ? "+" : ""}
-                {(margin - product.projectedMargin)
-                  .toFixed(1)
-                  .replace(".", ",")}{" "}
-                p.p. em relação ao preço atual
-              </p>
-              <span className="simulation-contribution">
-                Contribuição estimada por unidade<b>{money(contribution)}</b>
-              </span>
-            </div>
-            <div className="pricing-comparison">
-              <span>
-                Atual <b>{money(product.currentPrice)}</b>
-              </span>
-              <ArrowRight />
-              <span>
-                Simulado <b>{money(price)}</b>
-              </span>
-            </div>
-          </section>
-          <section className="pricing-channels">
-            <h3>Preços recomendados por canal</h3>
-            <p>Ajustados pelas taxas configuradas em cada canal.</p>
-            <div>
-              {channelRows.map((channel) => (
-                <article key={channel.id}>
-                  <span>
-                    <span className="channel-title">
-                      <b>{channel.name}</b>
-                      {channel.id === "store" && <em>Principal</em>}
+              <div className="pricing-comparison">
+                <span>
+                  Atual <b>{money(product.currentPrice)}</b>
+                </span>
+                <ArrowRight />
+                <span>
+                  Simulado <b>{money(price)}</b>
+                </span>
+              </div>
+            </section>
+          )}
+          {pricingReady && (
+            <section className="pricing-channels">
+              <h3>Preços recomendados por canal</h3>
+              <p>Ajustados pelas taxas configuradas em cada canal.</p>
+              <div>
+                {channelRows.map((channel) => (
+                  <article key={channel.id}>
+                    <span>
+                      <span className="channel-title">
+                        <b>{channel.name}</b>
+                        {channel.id === "store" && <em>Principal</em>}
+                      </span>
+                      <small>
+                        {channel.fee ? `Taxas ${channel.fee}%` : "Sem taxa"}
+                      </small>
                     </span>
-                    <small>
-                      {channel.fee ? `Taxas ${channel.fee}%` : "Sem taxa"}
-                    </small>
-                  </span>
-                  <span>
-                    <small>Preço recomendado</small>
-                    <b>{money(channel.suggested)}</b>
-                  </span>
-                  <span>
-                    <small>Margem projetada</small>
-                    <b>{formatPercent(channel.margin)}</b>
-                  </span>
-                </article>
-              ))}
-            </div>
-          </section>
+                    <span>
+                      <small>Preço recomendado</small>
+                      <b>{money(channel.suggested)}</b>
+                    </span>
+                    <span>
+                      <small>Margem projetada</small>
+                      <b>{formatPercent(channel.margin)}</b>
+                    </span>
+                  </article>
+                ))}
+              </div>
+            </section>
+          )}
         </div>
         <footer className="pricing-drawer-footer">
           <span>
-            {money(product.currentPrice)} <ArrowRight /> <b>{money(price)}</b>
+            {pricingReady ? (
+              <>
+                {money(product.currentPrice)} <ArrowRight />{" "}
+                <b>{money(price)}</b>
+              </>
+            ) : (
+              <b>Aguardando revisão da ficha técnica</b>
+            )}
           </span>
           <button
             className={buttonClass("primary")}

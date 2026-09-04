@@ -11,9 +11,9 @@ import {
 
 const intensityWeight = { low: 0.5, medium: 1, high: 1.5 } as const;
 
-function hasSuspiciousComposition(product: Product) {
+export function getPricingDataWarnings(product: Product) {
   const components = product.components ?? [];
-  if (components.length < 2 || product.currentPrice <= 0) return false;
+  if (components.length < 2 || product.currentPrice <= 0) return [];
 
   const directCostRatio = product.variableCost / product.currentPrice;
   const measuredQuantity = components.reduce((total, component) => {
@@ -26,10 +26,30 @@ function hasSuspiciousComposition(product: Product) {
     ["kg", "g", "l", "ml"].includes(component.unit.toLowerCase()),
   ).length;
 
-  return (
-    directCostRatio < 0.01 ||
-    (measuredComponents >= 2 && measuredQuantity > 0 && measuredQuantity <= 5)
-  );
+  const warnings: string[] = [];
+  if (directCostRatio < 0.01)
+    warnings.push(
+      "O custo da ficha está abaixo de 1% do preço de venda. Confira os preços e as quantidades dos componentes.",
+    );
+  if (
+    measuredComponents >= 2 &&
+    measuredQuantity > 0 &&
+    measuredQuantity <= 5
+  ) {
+    const names = components
+      .filter((component) =>
+        ["kg", "g", "l", "ml"].includes(component.unit.toLowerCase()),
+      )
+      .map(
+        (component) =>
+          `${component.name}: ${component.quantity} ${component.unit}`,
+      )
+      .join("; ");
+    warnings.push(
+      `A quantidade total informada parece muito baixa. Confirme: ${names}.`,
+    );
+  }
+  return warnings;
 }
 
 export function pricingStatus(margin: number, target: number): ProductStatus {
@@ -69,7 +89,8 @@ export function evaluateProductPricing(
     monthlyOverhead: allocatedOverhead,
     estimatedMonthlyRevenue: settings.financial.estimatedMonthlyRevenue,
   });
-  const suspiciousComposition = hasSuspiciousComposition(product);
+  const pricingWarnings = getPricingDataWarnings(product);
+  const suspiciousComposition = pricingWarnings.length > 0;
   const completeness = suspiciousComposition
     ? Math.min(baseCompleteness, 67)
     : baseCompleteness;
@@ -86,6 +107,7 @@ export function evaluateProductPricing(
       embeddedFees,
       completeness,
       suspiciousComposition,
+      pricingWarnings,
     };
   if (completeness < 100 || model.unitCost <= 0)
     return {
@@ -94,6 +116,8 @@ export function evaluateProductPricing(
         projectedMargin: 0,
         recommendedPrice: 0,
         status: "critical" as ProductStatus,
+        pricingCompleteness: completeness,
+        pricingWarnings,
       },
       effectiveCost: model.unitCost,
       laborCost: model.laborCost,
@@ -114,6 +138,8 @@ export function evaluateProductPricing(
       projectedMargin: margin,
       recommendedPrice,
       status: pricingStatus(margin, target),
+      pricingCompleteness: completeness,
+      pricingWarnings,
     },
     effectiveCost: model.unitCost,
     laborCost: model.laborCost,

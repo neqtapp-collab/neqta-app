@@ -12,7 +12,7 @@ import { buildPricingContext } from "@/lib/pricing-evaluation";
 export default async function Page({
   searchParams,
 }: {
-  searchParams: Promise<{ produto?: string }>;
+  searchParams: Promise<{ product?: string; produto?: string }>;
 }) {
   const supabase = await createClient();
   const [products, structure, team, settings, params] = await Promise.all([
@@ -28,7 +28,7 @@ export default async function Page({
     <AppShell active="/precificacao">
       <PricingPage
         initialProducts={products}
-        initialProductId={params.produto}
+        initialProductId={params.product ?? params.produto}
         monthlyOverhead={monthlyOverhead}
         selectiveCosts={selectiveCosts}
         directLaborHourlyCost={directLaborHourlyCost}
