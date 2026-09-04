@@ -47,7 +47,7 @@ function embeddedFees(product: Product) {
 
 function safeLimit(product: Product, minimumMargin = 25) {
   const divisor = 1 - minimumMargin / 100 - embeddedFees(product) / 100;
-  if (product.currentPrice <= 0 || divisor <= 0) return { minimumPrice: product.currentPrice, maxDiscount: 0 };
+  if (product.variableCost <= 0 || product.currentPrice <= 0 || divisor <= 0) return { minimumPrice: product.currentPrice, maxDiscount: 0 };
   const minimumPrice = product.variableCost / divisor;
   return { minimumPrice, maxDiscount: Math.max(0, (1 - minimumPrice / product.currentPrice) * 100) };
 }
@@ -73,6 +73,7 @@ function evaluatePromotion(product: Product, promotion: Pick<Promotion, 'promoti
   const promotionalPrice = promotion.promotionalPrice;
   const referencePrice = product.currentPrice + (secondaryProduct?.currentPrice ?? 0);
   const consideredCost = product.variableCost + (secondaryProduct?.variableCost ?? 0);
+  const incompleteCost = product.variableCost <= 0 || Boolean(secondaryProduct && secondaryProduct.variableCost <= 0);
   const feeAmount = product.currentPrice * embeddedFees(product) / 100
     + (secondaryProduct ? secondaryProduct.currentPrice * embeddedFees(secondaryProduct) / 100 : 0);
   const fees = referencePrice > 0 ? feeAmount / referencePrice * 100 : 0;
@@ -83,8 +84,9 @@ function evaluatePromotion(product: Product, promotion: Pick<Promotion, 'promoti
   const equivalentDiscount = referencePrice > 0
     ? Math.max(0, (1 - promotionalPrice / referencePrice) * 100)
     : 0;
-  const classification = statusFor(margin, minimumMargin);
-  const valid = margin >= minimumMargin
+  const classification = incompleteCost ? 'unsafe' : statusFor(margin, minimumMargin);
+  const valid = !incompleteCost
+    && margin >= minimumMargin
     && contribution > 0
     && promotionalPrice > consideredCost
     && classification !== 'unsafe'
@@ -424,6 +426,7 @@ function PromotionDrawer({ product, products, settings, initial, source, close, 
   const secondaryProduct = type === 'combo' ? products.find((item) => item.id === secondaryProductId) : undefined;
   const referencePrice = product.currentPrice + (secondaryProduct?.currentPrice ?? 0);
   const consideredCost = product.variableCost + (secondaryProduct?.variableCost ?? 0);
+  const incompleteCost = product.variableCost <= 0 || Boolean(secondaryProduct && secondaryProduct.variableCost <= 0);
   const embeddedFeeAmount = product.currentPrice * embeddedFees(product) / 100
     + (secondaryProduct ? secondaryProduct.currentPrice * embeddedFees(secondaryProduct) / 100 : 0);
   const combinedEmbeddedFees = referencePrice > 0 ? embeddedFeeAmount / referencePrice * 100 : 0;
@@ -444,10 +447,10 @@ function PromotionDrawer({ product, products, settings, initial, source, close, 
   const equivalentDiscount = referencePrice > 0 ? Math.max(0, (1 - promotionalPrice / referencePrice) * 100) : 0;
   const margin = marginForChannel(promotionalPrice, consideredCost, combinedEmbeddedFees) ?? 0;
   const contribution = promotionalPrice - consideredCost - promotionalPrice * combinedEmbeddedFees / 100;
-  const status = statusFor(margin,minimumMargin);
+  const status = incompleteCost ? 'unsafe' : statusFor(margin,minimumMargin);
   const noSpace = limit.maxDiscount < 1;
   const dateValid = !startDate || !endDate || endDate >= startDate;
-  const financiallyValid = margin >= minimumMargin && contribution > 0 && promotionalPrice > consideredCost && status !== 'unsafe' && equivalentDiscount <= activeLimit.maxDiscount + 0.001;
+  const financiallyValid = !incompleteCost && margin >= minimumMargin && contribution > 0 && promotionalPrice > consideredCost && status !== 'unsafe' && equivalentDiscount <= activeLimit.maxDiscount + 0.001;
   const valid = !noSpace && promotionalPrice > 0 && equivalentDiscount > 0 && financiallyValid && selectedChannels.length > 0 && dateValid && (type !== 'combo' || !!secondaryProduct);
   const availableChannels=settings.channels.filter(channel=>channel.active);
   const channelRows = availableChannels.filter((channel) => selectedChannels.includes(channel.id)).map((channel) => {

@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/client';
 import { getCurrentContext } from '@/lib/supabase/current-context';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import Decimal from 'decimal.js';
 
 import type {
   CreateProductDTO,
@@ -12,6 +13,7 @@ import type {
 } from '@/types/product';
 import type { CostItem } from '@/types/cost';
 import { componentCost, type Unit } from '@/lib/units';
+import { effectiveUnitCostForItem } from '@/services/costs.service';
 
 type ProductMetadata = Pick<Product,
   'description' | 'variableCost' | 'targetMargin' | 'recommendedPrice' | 'components' | 'packaging' | 'laborMinutes' | 'directOperationalCost' | 'operationalCosts' | 'utilityUsages'
@@ -89,7 +91,11 @@ function getCategoryName(
 function calculateStatus(
   projectedMargin: number,
   targetMargin: number,
+  variableCost: number,
 ): ProductStatus {
+  if (variableCost <= 0) {
+    return 'critical';
+  }
   if (projectedMargin <= 0) {
     return 'warning';
   }
@@ -139,9 +145,10 @@ function calculatePackagingCost(packaging: ProductPackaging[] | undefined): numb
 }
 
 function componentReferenceCost(item: CostItem): number {
+  const effectiveCost = effectiveUnitCostForItem(item);
   return item.purchaseUnit === 'g' || item.purchaseUnit === 'ml'
-    ? item.baseUnitCost * 1000
-    : item.baseUnitCost;
+    ? effectiveCost * 1000
+    : effectiveCost;
 }
 
 function normalizedName(value: string): string {
@@ -171,14 +178,14 @@ function enrichProductCosts(product: Product, costs: CostItem[]): Product {
   });
   const packaging = (product.packaging ?? []).map((item) => {
     const cost = costs.find((entry) => entry.type === 'packaging' && matchesLegacyCostReference(item, entry));
-    return cost ? { ...item, id: cost.id, name: cost.name, unitCost: cost.baseUnitCost } : item;
+    return cost ? { ...item, id: cost.id, name: cost.name, unitCost: effectiveUnitCostForItem(cost) } : item;
   });
   const componentsCost = components.reduce(
     (total, item) => total + componentCost(item.quantity, item.unit as Unit, item.unitCost), 0,
   );
   const packagingCost = calculatePackagingCost(packaging);
-  const variableCost = componentsCost + packagingCost;
-  const projectedMargin = product.currentPrice > 0
+  const variableCost = new Decimal(componentsCost).plus(packagingCost).toDecimalPlaces(2).toNumber();
+  const projectedMargin = product.currentPrice > 0 && variableCost > 0
     ? ((product.currentPrice - variableCost) / product.currentPrice) * 100
     : 0;
   const recommendedPrice = product.targetMargin < 100
@@ -192,7 +199,7 @@ function enrichProductCosts(product: Product, costs: CostItem[]): Product {
     variableCost,
     projectedMargin,
     recommendedPrice,
-    status: isBase ? 'recipe' : calculateStatus(projectedMargin, product.targetMargin),
+    status: isBase ? 'recipe' : calculateStatus(projectedMargin, product.targetMargin, variableCost),
     unitCost: isBase && product.yieldQuantity && product.yieldQuantity > 0
       ? variableCost / product.yieldQuantity
       : product.unitCost,
@@ -210,7 +217,7 @@ function mapProduct(row: ProductRow): Product {
    */
   const variableCost = metadata.variableCost ?? 0;
   const targetMargin = metadata.targetMargin ?? 0;
-  const projectedMargin = currentPrice > 0
+  const projectedMargin = currentPrice > 0 && variableCost > 0
     ? ((currentPrice - variableCost) / currentPrice) * 100
     : 0;
   const recommendedPrice = metadata.recommendedPrice ?? currentPrice;
@@ -231,7 +238,7 @@ function mapProduct(row: ProductRow): Product {
     targetMargin,
     recommendedPrice,
 
-    status: isBase ? 'recipe' : calculateStatus(projectedMargin, targetMargin),
+    status: isBase ? 'recipe' : calculateStatus(projectedMargin, targetMargin, variableCost),
 
     kind,
 

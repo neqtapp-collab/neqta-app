@@ -5,7 +5,11 @@ import { storeCollection } from '@/services/store-records.service';
 export function calculateBaseUnitCost(price: number, quantity: number) { return quantity > 0 ? new Decimal(price).div(quantity).toDecimalPlaces(4).toNumber() : 0; }
 export function calculateEffectiveUnitCost(price: number, quantity: number, freight = 0, discount = 0, lossPercentage = 0) {
   const usable = new Decimal(quantity || 0).mul(new Decimal(1).minus(new Decimal(lossPercentage || 0).div(100)));
-  return usable.gt(0) ? new Decimal(price).plus(freight).minus(discount).div(usable).toDecimalPlaces(4).toNumber() : 0;
+  const netCost = new Decimal(price || 0).plus(freight || 0).minus(discount || 0);
+  return usable.gt(0) && netCost.gte(0) ? netCost.div(usable).toDecimalPlaces(4).toNumber() : 0;
+}
+export function effectiveUnitCostForItem(item: Pick<CostItem, 'purchasePrice' | 'purchaseQuantity' | 'freight' | 'discount' | 'lossPercentage'>) {
+  return calculateEffectiveUnitCost(item.purchasePrice, item.purchaseQuantity, item.freight, item.discount, item.lossPercentage);
 }
 export function priceVariation(current: number, previous?: number) { return previous && previous > 0 ? new Decimal(current).minus(previous).div(previous).mul(100).toDecimalPlaces(1).toNumber() : null; }
 export function convertUnitCost(cost: number, from: PurchaseUnit, to: PurchaseUnit) { if (from === to) return cost; if (from === 'kg' && to === 'g' || from === 'L' && to === 'ml') return new Decimal(cost).div(1000).toNumber(); if (from === 'g' && to === 'kg' || from === 'ml' && to === 'L') return new Decimal(cost).mul(1000).toNumber(); return cost; }

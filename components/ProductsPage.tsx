@@ -9,7 +9,7 @@ import { CustomSelect } from '@/components/CustomSelect';
 import { buildPricingCost, calculateMargin, formatPercent, marginForChannel, money, multiplyMoney, parseBRL, recommendedPriceForChannel, sumMoney } from '@/lib/financial';
 import { componentCost, type Unit } from '@/lib/units';
 import { productsService } from '@/services/products.service';
-import { costService, structureCostService, teamCostService } from '@/services/costs.service';
+import { costService, effectiveUnitCostForItem, structureCostService, teamCostService } from '@/services/costs.service';
 import { routes } from '@/config/routes';
 import { sanitizeDecimal } from '@/lib/input';
 import { defaultSettings, loadSettingsFromSupabase } from '@/lib/settings';
@@ -339,7 +339,7 @@ function ProductWizard({ product, close, save }: { product: Product | null; clos
   function removePackaging(id: string) { setPackages((current) => current.filter((item) => item.id !== id)); if (editingPackaging === id) resetPackaging(); }
   function canContinue() { if (step === 1) return Boolean(name.trim() && category && price >= 0); if (step === 2) return components.length > 0; return true; }
   function next() { if (!canContinue()) { setError(step === 1 ? 'Informe o nome e a categoria do produto.' : 'Adicione pelo menos um componente.'); return; } setError(''); setStep((current) => Math.min(4, current + 1)); }
-  function submit() { save({ id: product?.id ?? `produto-${Date.now()}`, name: name.trim(), category, description: description.trim(), components, packaging: packages, kind: 'product', variableCost: baseCost, laborMinutes, directOperationalCost:operationalTotal, operationalCosts, utilityUsages, currentPrice: price, projectedMargin: margin, targetMargin: target, recommendedPrice: primaryRecommended ?? totalCost, status: price <= 0 || margin < target - 8 ? 'critical' : margin < target ? 'warning' : 'healthy' }); }
+  function submit() { save({ id: product?.id ?? `produto-${Date.now()}`, name: name.trim(), category, description: description.trim(), components, packaging: packages, kind: 'product', variableCost: baseCost, laborMinutes, directOperationalCost:operationalTotal, operationalCosts, utilityUsages, currentPrice: price, projectedMargin: baseCost > 0 ? margin : 0, targetMargin: target, recommendedPrice: primaryRecommended ?? totalCost, status: baseCost <= 0 || price <= 0 || margin < target - 8 ? 'critical' : margin < target ? 'warning' : 'healthy' }); }
 
   useEffect(() => { if (!toast) return; const timer = window.setTimeout(() => setToast(''), 3000); return () => window.clearTimeout(timer); }, [toast]);
   if (creatingRecipe) return <RecipeWizard recipe={null} close={() => setCreatingRecipe(false)} save={saveCreatedRecipe} />;
@@ -399,7 +399,7 @@ function RecipeWizard({ recipe, close: finishClose, save }: { recipe: Product | 
   const [error, setError] = useState('');
   const [recipeToast, setRecipeToast] = useState('');
   const [discardingRecipe, setDiscardingRecipe] = useState(false);
-  const total = ingredients.reduce((sum, item) => sum + componentCost(item.quantity, item.unit, item.unitCost), 0);
+  const total = sumMoney(ingredients.map((item) => componentCost(item.quantity, item.unit, item.unitCost)));
   const unitCost = yieldQuantity > 0 && ingredients.length ? total / yieldQuantity : 0;
   const valid = Boolean(name.trim() && yieldQuantity > 0 && yieldUnit && ingredients.length);
   useEffect(() => {
@@ -538,9 +538,9 @@ function ImportDrawer({ close }: { close: () => void }) {
               return;
             }
             if (cost?.type === 'packaging') {
-              product.packaging.push({ id: cost.id, name: cost.name, quantity, unitCost: cost.baseUnitCost });
+              product.packaging.push({ id: cost.id, name: cost.name, quantity, unitCost: effectiveUnitCostForItem(cost) });
             } else if (cost) {
-              product.components.push({ id: cost.id, name: cost.name, type: 'INSUMO', quantity, unit: costItemUnit(cost.purchaseUnit), unitCost: normalizedComponentUnitCost(cost.baseUnitCost, cost.purchaseUnit) });
+              product.components.push({ id: cost.id, name: cost.name, type: 'INSUMO', quantity, unit: costItemUnit(cost.purchaseUnit), unitCost: normalizedComponentUnitCost(effectiveUnitCostForItem(cost), cost.purchaseUnit) });
             } else if (matchingRecipe) {
               const importedRecipeCost = 'type' in matchingRecipe
                 ? matchingRecipe.components.reduce((sum, item) => sum + componentCost(item.quantity, item.unit as Unit, item.unitCost), 0) / (matchingRecipe.yieldQuantity || 1)
@@ -554,7 +554,7 @@ function ImportDrawer({ close }: { close: () => void }) {
         .forEach((entry) => nextErrors.push(`Linha ${entry.row}: adicione ao menos um ingrediente para a receita-base ${entry.name} na aba Composição.`));
       const importedRecipes = nextPreview.filter((entry) => entry.type === 'recipe');
       importedRecipes.forEach((recipe) => {
-        const total = recipe.components.reduce((sum, item) => sum + componentCost(item.quantity, item.unit as Unit, item.unitCost), 0);
+        const total = sumMoney(recipe.components.map((item) => componentCost(item.quantity, item.unit as Unit, item.unitCost)));
         const unitCost = recipe.yieldQuantity && recipe.yieldQuantity > 0 ? total / recipe.yieldQuantity : 0;
         nextPreview.forEach((entry) => entry.components.forEach((component) => {
           if (component.type === 'RECEITA-BASE' && normalizedImportHeader(component.name) === normalizedImportHeader(recipe.name)) component.unitCost = unitCost;
