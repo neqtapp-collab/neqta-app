@@ -1,7 +1,7 @@
-import { createClient } from '@/lib/supabase/client';
-import { getCurrentContext } from '@/lib/supabase/current-context';
-import type { SupabaseClient } from '@supabase/supabase-js';
-import Decimal from 'decimal.js';
+import { createClient } from "@/lib/supabase/client";
+import { getCurrentContext } from "@/lib/supabase/current-context";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import Decimal from "decimal.js";
 
 import type {
   CreateProductDTO,
@@ -10,13 +10,26 @@ import type {
   ProductPackaging,
   ProductStatus,
   UpdateProductDTO,
-} from '@/types/product';
-import type { CostItem } from '@/types/cost';
-import { componentCost, type Unit } from '@/lib/units';
-import { effectiveUnitCostForItem } from '@/services/costs.service';
+} from "@/types/product";
+import type { CostItem } from "@/types/cost";
+import { componentCost, type Unit } from "@/lib/units";
+import {
+  effectiveUnitCostForItem,
+  effectiveUnitForItem,
+} from "@/services/costs.service";
 
-type ProductMetadata = Pick<Product,
-  'description' | 'variableCost' | 'targetMargin' | 'recommendedPrice' | 'components' | 'packaging' | 'laborMinutes' | 'directOperationalCost' | 'operationalCosts' | 'utilityUsages'
+type ProductMetadata = Pick<
+  Product,
+  | "description"
+  | "variableCost"
+  | "targetMargin"
+  | "recommendedPrice"
+  | "components"
+  | "packaging"
+  | "laborMinutes"
+  | "directOperationalCost"
+  | "operationalCosts"
+  | "utilityUsages"
 > & { version: 1 };
 
 type ProductCategoryRow = {
@@ -52,19 +65,14 @@ export interface ProductsService {
 
   create(dto: CreateProductDTO): Promise<Product>;
 
-  update(
-    id: string,
-    dto: UpdateProductDTO,
-  ): Promise<Product>;
+  update(id: string, dto: UpdateProductDTO): Promise<Product>;
 
   save(product: Product): Promise<Product>;
 
   remove(id: string): Promise<void>;
 }
 
-function toNumber(
-  value: number | string | null | undefined,
-): number {
+function toNumber(value: number | string | null | undefined): number {
   if (value === null || value === undefined) {
     return 0;
   }
@@ -74,18 +82,16 @@ function toNumber(
   return Number.isFinite(number) ? number : 0;
 }
 
-function getCategoryName(
-  relation: ProductRow['product_categories'],
-): string {
+function getCategoryName(relation: ProductRow["product_categories"]): string {
   if (!relation) {
-    return '';
+    return "";
   }
 
   if (Array.isArray(relation)) {
-    return relation[0]?.name ?? '';
+    return relation[0]?.name ?? "";
   }
 
-  return relation.name ?? '';
+  return relation.name ?? "";
 }
 
 function calculateStatus(
@@ -94,21 +100,21 @@ function calculateStatus(
   variableCost: number,
 ): ProductStatus {
   if (variableCost <= 0) {
-    return 'critical';
+    return "critical";
   }
   if (projectedMargin <= 0) {
-    return 'warning';
+    return "warning";
   }
 
   if (projectedMargin < targetMargin * 0.75) {
-    return 'critical';
+    return "critical";
   }
 
   if (projectedMargin < targetMargin) {
-    return 'warning';
+    return "warning";
   }
 
-  return 'healthy';
+  return "healthy";
 }
 
 function readMetadata(value: string | null): Partial<ProductMetadata> {
@@ -124,7 +130,7 @@ function readMetadata(value: string | null): Partial<ProductMetadata> {
 function writeMetadata(dto: CreateProductDTO | UpdateProductDTO): string {
   return JSON.stringify({
     version: 1,
-    description: dto.description ?? '',
+    description: dto.description ?? "",
     variableCost: dto.variableCost ?? 0,
     targetMargin: dto.targetMargin ?? 0,
     recommendedPrice: dto.recommendedPrice ?? dto.currentPrice ?? 0,
@@ -137,7 +143,9 @@ function writeMetadata(dto: CreateProductDTO | UpdateProductDTO): string {
   } satisfies ProductMetadata);
 }
 
-function calculatePackagingCost(packaging: ProductPackaging[] | undefined): number {
+function calculatePackagingCost(
+  packaging: ProductPackaging[] | undefined,
+): number {
   return (packaging ?? []).reduce(
     (total, item) => total + toNumber(item.quantity) * toNumber(item.unitCost),
     0,
@@ -146,52 +154,101 @@ function calculatePackagingCost(packaging: ProductPackaging[] | undefined): numb
 
 function componentReferenceCost(item: CostItem): number {
   const effectiveCost = effectiveUnitCostForItem(item);
-  return item.purchaseUnit === 'g' || item.purchaseUnit === 'ml'
+  const effectiveUnit = effectiveUnitForItem(item);
+  return effectiveUnit === "g" || effectiveUnit === "ml"
     ? effectiveCost * 1000
     : effectiveCost;
 }
 
 function normalizedName(value: string): string {
-  return value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLocaleLowerCase('pt-BR');
+  return value
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLocaleLowerCase("pt-BR");
 }
 
-function matchesLegacyCostReference(reference: { id: string; name: string }, item: CostItem): boolean {
+function matchesLegacyCostReference(
+  reference: { id: string; name: string },
+  item: CostItem,
+): boolean {
   if (reference.id === item.id) return true;
   const referenceName = normalizedName(reference.name);
   const itemName = normalizedName(item.name);
-  return referenceName === itemName
-    || (referenceName.length >= 5 && itemName.length >= 5
-      && (referenceName.includes(itemName) || itemName.includes(referenceName)));
+  return (
+    referenceName === itemName ||
+    (referenceName.length >= 5 &&
+      itemName.length >= 5 &&
+      (referenceName.includes(itemName) || itemName.includes(referenceName)))
+  );
 }
 
-async function loadCostItems(supabase: SupabaseClient, storeId: string): Promise<CostItem[]> {
-  const { data, error } = await supabase.from('neqta_records').select('record_key,data')
-    .eq('store_id', storeId).eq('namespace', 'cost-items');
-  if (error) throw new Error(`Erro ao carregar custos dos produtos: ${error.message}`);
-  return (data ?? []).map((row) => ({ ...(row.data as CostItem), id: row.record_key }));
+async function loadCostItems(
+  supabase: SupabaseClient,
+  storeId: string,
+): Promise<CostItem[]> {
+  const { data, error } = await supabase
+    .from("neqta_records")
+    .select("record_key,data")
+    .eq("store_id", storeId)
+    .eq("namespace", "cost-items");
+  if (error)
+    throw new Error(`Erro ao carregar custos dos produtos: ${error.message}`);
+  return (data ?? []).map((row) => ({
+    ...(row.data as CostItem),
+    id: row.record_key,
+  }));
 }
 
 function enrichProductCosts(product: Product, costs: CostItem[]): Product {
   const components = (product.components ?? []).map((component) => {
-    const cost = costs.find((item) => item.type === 'ingredient' && matchesLegacyCostReference(component, item));
-    return cost ? { ...component, id: cost.id, name: cost.name, unitCost: componentReferenceCost(cost) } : component;
+    const cost = costs.find(
+      (item) =>
+        item.type === "ingredient" &&
+        matchesLegacyCostReference(component, item),
+    );
+    return cost
+      ? {
+          ...component,
+          id: cost.id,
+          name: cost.name,
+          unitCost: componentReferenceCost(cost),
+        }
+      : component;
   });
   const packaging = (product.packaging ?? []).map((item) => {
-    const cost = costs.find((entry) => entry.type === 'packaging' && matchesLegacyCostReference(item, entry));
-    return cost ? { ...item, id: cost.id, name: cost.name, unitCost: effectiveUnitCostForItem(cost) } : item;
+    const cost = costs.find(
+      (entry) =>
+        entry.type === "packaging" && matchesLegacyCostReference(item, entry),
+    );
+    return cost
+      ? {
+          ...item,
+          id: cost.id,
+          name: cost.name,
+          unitCost: effectiveUnitCostForItem(cost),
+        }
+      : item;
   });
   const componentsCost = components.reduce(
-    (total, item) => total + componentCost(item.quantity, item.unit as Unit, item.unitCost), 0,
+    (total, item) =>
+      total + componentCost(item.quantity, item.unit as Unit, item.unitCost),
+    0,
   );
   const packagingCost = calculatePackagingCost(packaging);
-  const variableCost = new Decimal(componentsCost).plus(packagingCost).toDecimalPlaces(2).toNumber();
-  const projectedMargin = product.currentPrice > 0 && variableCost > 0
-    ? ((product.currentPrice - variableCost) / product.currentPrice) * 100
-    : 0;
-  const recommendedPrice = product.targetMargin < 100
-    ? variableCost / (1 - product.targetMargin / 100)
-    : product.currentPrice;
-  const isBase = product.status === 'recipe';
+  const variableCost = new Decimal(componentsCost)
+    .plus(packagingCost)
+    .toDecimalPlaces(2)
+    .toNumber();
+  const projectedMargin =
+    product.currentPrice > 0 && variableCost > 0
+      ? ((product.currentPrice - variableCost) / product.currentPrice) * 100
+      : 0;
+  const recommendedPrice =
+    product.targetMargin < 100
+      ? variableCost / (1 - product.targetMargin / 100)
+      : product.currentPrice;
+  const isBase = product.status === "recipe";
   return {
     ...product,
     components,
@@ -199,10 +256,13 @@ function enrichProductCosts(product: Product, costs: CostItem[]): Product {
     variableCost,
     projectedMargin,
     recommendedPrice,
-    status: isBase ? 'recipe' : calculateStatus(projectedMargin, product.targetMargin, variableCost),
-    unitCost: isBase && product.yieldQuantity && product.yieldQuantity > 0
-      ? variableCost / product.yieldQuantity
-      : product.unitCost,
+    status: isBase
+      ? "recipe"
+      : calculateStatus(projectedMargin, product.targetMargin, variableCost),
+    unitCost:
+      isBase && product.yieldQuantity && product.yieldQuantity > 0
+        ? variableCost / product.yieldQuantity
+        : product.unitCost,
   };
 }
 
@@ -217,14 +277,16 @@ function mapProduct(row: ProductRow): Product {
    */
   const variableCost = metadata.variableCost ?? 0;
   const targetMargin = metadata.targetMargin ?? 0;
-  const projectedMargin = currentPrice > 0 && variableCost > 0
-    ? ((currentPrice - variableCost) / currentPrice) * 100
-    : 0;
+  const projectedMargin =
+    currentPrice > 0 && variableCost > 0
+      ? ((currentPrice - variableCost) / currentPrice) * 100
+      : 0;
   const recommendedPrice = metadata.recommendedPrice ?? currentPrice;
 
-  const kind: ProductKind = 'product';
+  const kind: ProductKind = "product";
   const isBase = Boolean(row.is_base);
-  const yieldQuantity = row.yield_quantity !== null ? toNumber(row.yield_quantity) : undefined;
+  const yieldQuantity =
+    row.yield_quantity !== null ? toNumber(row.yield_quantity) : undefined;
   const yieldUnit = row.yield_unit ?? undefined;
 
   return {
@@ -238,7 +300,9 @@ function mapProduct(row: ProductRow): Product {
     targetMargin,
     recommendedPrice,
 
-    status: isBase ? 'recipe' : calculateStatus(projectedMargin, targetMargin, variableCost),
+    status: isBase
+      ? "recipe"
+      : calculateStatus(projectedMargin, targetMargin, variableCost),
 
     kind,
 
@@ -249,10 +313,13 @@ function mapProduct(row: ProductRow): Product {
 
     yieldQuantity,
     yieldUnit,
-    unitCost: isBase && yieldQuantity && yieldQuantity > 0 ? variableCost / yieldQuantity : undefined,
+    unitCost:
+      isBase && yieldQuantity && yieldQuantity > 0
+        ? variableCost / yieldQuantity
+        : undefined,
 
     componentCount: metadata.components?.length ?? 0,
-    description: metadata.description ?? '',
+    description: metadata.description ?? "",
     components: metadata.components ?? [],
     packaging,
     laborMinutes: metadata.laborMinutes ?? 0,
@@ -267,14 +334,12 @@ async function getStoreId(supabase: SupabaseClient): Promise<string> {
 
   if (!context) {
     throw new Error(
-      'Não foi possível identificar o contexto atual do usuário.',
+      "Não foi possível identificar o contexto atual do usuário.",
     );
   }
 
   if (!context.store) {
-    throw new Error(
-      'Não foi possível identificar a loja atual.',
-    );
+    throw new Error("Não foi possível identificar a loja atual.");
   }
 
   return context.store.id;
@@ -293,25 +358,23 @@ async function findCategoryId(
   const supabase = createClient();
 
   const { data, error } = await supabase
-    .from('product_categories')
-    .select('id')
-    .eq('store_id', storeId)
-    .ilike('name', normalizedName)
+    .from("product_categories")
+    .select("id")
+    .eq("store_id", storeId)
+    .ilike("name", normalizedName)
     .limit(1)
     .maybeSingle();
 
   if (error) {
-    throw new Error(
-      `Erro ao localizar categoria: ${error.message}`,
-    );
+    throw new Error(`Erro ao localizar categoria: ${error.message}`);
   }
 
   if (data?.id) return data.id;
 
   const { data: created, error: createError } = await supabase
-    .from('product_categories')
+    .from("product_categories")
     .insert({ store_id: storeId, name: normalizedName })
-    .select('id')
+    .select("id")
     .single();
 
   if (createError) {
@@ -321,15 +384,14 @@ async function findCategoryId(
   return created.id;
 }
 
-async function getProductRow(
-  id: string,
-): Promise<ProductRow | null> {
+async function getProductRow(id: string): Promise<ProductRow | null> {
   const supabase = createClient();
   const storeId = await getStoreId(supabase);
 
   const { data, error } = await supabase
-    .from('products')
-    .select(`
+    .from("products")
+    .select(
+      `
       id,
       store_id,
       category_id,
@@ -348,16 +410,15 @@ async function getProductRow(
         id,
         name
       )
-    `)
-    .eq('id', id)
-    .eq('store_id', storeId)
-    .eq('active', true)
+    `,
+    )
+    .eq("id", id)
+    .eq("store_id", storeId)
+    .eq("active", true)
     .maybeSingle();
 
   if (error) {
-    throw new Error(
-      `Erro ao carregar produto: ${error.message}`,
-    );
+    throw new Error(`Erro ao carregar produto: ${error.message}`);
   }
 
   return data as ProductRow | null;
@@ -369,8 +430,9 @@ export const productsService: ProductsService = {
     const storeId = await getStoreId(supabase);
 
     const productsRequest = supabase
-      .from('products')
-      .select(`
+      .from("products")
+      .select(
+        `
         id,
         store_id,
         category_id,
@@ -389,10 +451,11 @@ export const productsService: ProductsService = {
           id,
           name
         )
-      `)
-      .eq('store_id', storeId)
-      .eq('active', true)
-      .order('name', {
+      `,
+      )
+      .eq("store_id", storeId)
+      .eq("active", true)
+      .order("name", {
         ascending: true,
       });
 
@@ -402,12 +465,12 @@ export const productsService: ProductsService = {
     ]);
 
     if (error) {
-      throw new Error(
-        `Erro ao carregar produtos: ${error.message}`,
-      );
+      throw new Error(`Erro ao carregar produtos: ${error.message}`);
     }
 
-    return (data as ProductRow[]).map(mapProduct).map((product) => enrichProductCosts(product, costs));
+    return (data as ProductRow[])
+      .map(mapProduct)
+      .map((product) => enrichProductCosts(product, costs));
   },
 
   async getById(id) {
@@ -419,20 +482,20 @@ export const productsService: ProductsService = {
 
     const supabase = createClient();
     const storeId = await getStoreId(supabase);
-    return enrichProductCosts(mapProduct(row), await loadCostItems(supabase, storeId));
+    return enrichProductCosts(
+      mapProduct(row),
+      await loadCostItems(supabase, storeId),
+    );
   },
 
   async create(dto) {
     const supabase = createClient();
     const storeId = await getStoreId(supabase);
 
-    const categoryId = await findCategoryId(
-      dto.category,
-      storeId,
-    );
+    const categoryId = await findCategoryId(dto.category, storeId);
 
     const { data, error } = await supabase
-      .from('products')
+      .from("products")
       .insert({
         store_id: storeId,
         category_id: categoryId,
@@ -451,7 +514,8 @@ export const productsService: ProductsService = {
 
         active: true,
       })
-      .select(`
+      .select(
+        `
         id,
         store_id,
         category_id,
@@ -470,13 +534,12 @@ export const productsService: ProductsService = {
           id,
           name
         )
-      `)
+      `,
+      )
       .single();
 
     if (error) {
-      throw new Error(
-        `Erro ao criar produto: ${error.message}`,
-      );
+      throw new Error(`Erro ao criar produto: ${error.message}`);
     }
 
     return mapProduct(data as ProductRow);
@@ -500,7 +563,7 @@ export const productsService: ProductsService = {
     const currentRow = await getProductRow(id);
 
     if (!currentRow) {
-      throw new Error('Produto não encontrado.');
+      throw new Error("Produto não encontrado.");
     }
 
     const current = mapProduct(currentRow);
@@ -516,10 +579,11 @@ export const productsService: ProductsService = {
       components: dto.components ?? current.components,
       packaging: dto.packaging ?? current.packaging,
       laborMinutes: dto.laborMinutes ?? current.laborMinutes,
-      directOperationalCost: dto.directOperationalCost ?? current.directOperationalCost,
+      directOperationalCost:
+        dto.directOperationalCost ?? current.directOperationalCost,
       operationalCosts: dto.operationalCosts ?? current.operationalCosts,
       utilityUsages: dto.utilityUsages ?? current.utilityUsages,
-      isBase: dto.isBase ?? current.status === 'recipe',
+      isBase: dto.isBase ?? current.status === "recipe",
       yieldQuantity: dto.yieldQuantity ?? current.yieldQuantity,
       yieldUnit: dto.yieldUnit ?? current.yieldUnit,
     };
@@ -533,15 +597,21 @@ export const productsService: ProductsService = {
     }
 
     if (dto.category !== undefined) {
-      payload.category_id = await findCategoryId(
-        dto.category,
-        storeId,
-      );
+      payload.category_id = await findCategoryId(dto.category, storeId);
     }
 
-    if (dto.description !== undefined || dto.variableCost !== undefined ||
-        dto.targetMargin !== undefined || dto.recommendedPrice !== undefined ||
-        dto.components !== undefined || dto.packaging !== undefined || dto.laborMinutes !== undefined || dto.directOperationalCost !== undefined || dto.operationalCosts !== undefined || dto.utilityUsages !== undefined) {
+    if (
+      dto.description !== undefined ||
+      dto.variableCost !== undefined ||
+      dto.targetMargin !== undefined ||
+      dto.recommendedPrice !== undefined ||
+      dto.components !== undefined ||
+      dto.packaging !== undefined ||
+      dto.laborMinutes !== undefined ||
+      dto.directOperationalCost !== undefined ||
+      dto.operationalCosts !== undefined ||
+      dto.utilityUsages !== undefined
+    ) {
       payload.description = writeMetadata(mergedDto);
     }
 
@@ -549,15 +619,17 @@ export const productsService: ProductsService = {
       payload.packaging_cost = calculatePackagingCost(mergedDto.packaging);
     }
     if (dto.isBase !== undefined) payload.is_base = dto.isBase;
-    if (dto.yieldQuantity !== undefined) payload.yield_quantity = dto.yieldQuantity;
+    if (dto.yieldQuantity !== undefined)
+      payload.yield_quantity = dto.yieldQuantity;
     if (dto.yieldUnit !== undefined) payload.yield_unit = dto.yieldUnit;
 
     const { data, error } = await supabase
-      .from('products')
+      .from("products")
       .update(payload)
-      .eq('id', id)
-      .eq('store_id', storeId)
-      .select(`
+      .eq("id", id)
+      .eq("store_id", storeId)
+      .select(
+        `
         id,
         store_id,
         category_id,
@@ -576,17 +648,16 @@ export const productsService: ProductsService = {
           id,
           name
         )
-      `)
+      `,
+      )
       .maybeSingle();
 
     if (error) {
-      throw new Error(
-        `Erro ao atualizar produto: ${error.message}`,
-      );
+      throw new Error(`Erro ao atualizar produto: ${error.message}`);
     }
 
     if (!data) {
-      throw new Error('Produto não encontrado.');
+      throw new Error("Produto não encontrado.");
     }
 
     return mapProduct(data as ProductRow);
@@ -609,7 +680,7 @@ export const productsService: ProductsService = {
         directOperationalCost: product.directOperationalCost,
         operationalCosts: product.operationalCosts,
         utilityUsages: product.utilityUsages,
-        isBase: product.status === 'recipe',
+        isBase: product.status === "recipe",
         yieldQuantity: product.yieldQuantity,
         yieldUnit: product.yieldUnit,
       });
@@ -640,7 +711,7 @@ export const productsService: ProductsService = {
         directOperationalCost: product.directOperationalCost,
         operationalCosts: product.operationalCosts,
         utilityUsages: product.utilityUsages,
-        isBase: product.status === 'recipe',
+        isBase: product.status === "recipe",
         yieldQuantity: product.yieldQuantity,
         yieldUnit: product.yieldUnit,
       });
@@ -661,7 +732,7 @@ export const productsService: ProductsService = {
       directOperationalCost: product.directOperationalCost,
       operationalCosts: product.operationalCosts,
       utilityUsages: product.utilityUsages,
-      isBase: product.status === 'recipe',
+      isBase: product.status === "recipe",
       yieldQuantity: product.yieldQuantity,
       yieldUnit: product.yieldUnit,
     });
@@ -678,17 +749,15 @@ export const productsService: ProductsService = {
      * mas deixa de aparecer na aplicação.
      */
     const { error } = await supabase
-      .from('products')
+      .from("products")
       .update({
         active: false,
       })
-      .eq('id', id)
-      .eq('store_id', storeId);
+      .eq("id", id)
+      .eq("store_id", storeId);
 
     if (error) {
-      throw new Error(
-        `Erro ao remover produto: ${error.message}`,
-      );
+      throw new Error(`Erro ao remover produto: ${error.message}`);
     }
   },
 };

@@ -9,7 +9,7 @@ import { CustomSelect } from '@/components/CustomSelect';
 import { buildPricingCost, calculateMargin, formatPercent, marginForChannel, money, multiplyMoney, parseBRL, recommendedPriceForChannel, sumMoney } from '@/lib/financial';
 import { componentCost, type Unit } from '@/lib/units';
 import { productsService } from '@/services/products.service';
-import { costService, effectiveUnitCostForItem, structureCostService, teamCostService } from '@/services/costs.service';
+import { costService, effectiveUnitCostForItem, effectiveUnitForItem, structureCostService, teamCostService } from '@/services/costs.service';
 import { routes } from '@/config/routes';
 import { sanitizeDecimal } from '@/lib/input';
 import { defaultSettings, loadSettingsFromSupabase } from '@/lib/settings';
@@ -36,6 +36,10 @@ function costItemUnit(unit: import('@/types/cost').PurchaseUnit): Unit {
   if (unit === 'L' || unit === 'ml') return 'ml';
   if (unit === 'pct') return 'pacote';
   return unit;
+}
+
+function resolvedCostItemUnit(item: import('@/types/cost').CostItem): Unit {
+  return costItemUnit(effectiveUnitForItem(item) ?? item.purchaseUnit);
 }
 
 function normalizedComponentUnitCost(
@@ -250,8 +254,8 @@ function ProductWizard({ product, close, save }: { product: Product | null; clos
           id: item.id,
           name: item.name,
           type: 'INSUMO',
-          unit: costItemUnit(item.purchaseUnit),
-          unitCost: normalizedComponentUnitCost(item.baseUnitCost, item.purchaseUnit),
+          unit: resolvedCostItemUnit(item),
+          unitCost: normalizedComponentUnitCost(effectiveUnitCostForItem(item), effectiveUnitForItem(item) ?? item.purchaseUnit),
         }));
       const recipeComponents: Array<Omit<ComponentLine, 'quantity'>> = savedProducts
         .filter((item) => item.status === 'recipe' && item.id !== product?.id)
@@ -268,7 +272,7 @@ function ProductWizard({ product, close, save }: { product: Product | null; clos
       ]);
       const nextPackaging = items
         .filter((item) => item.type === 'packaging')
-        .map((item) => ({ id: item.id, name: item.name, unitCost: item.baseUnitCost }));
+        .map((item) => ({ id: item.id, name: item.name, unitCost: effectiveUnitCostForItem(item) }));
       packagingOptions.splice(0, packagingOptions.length, ...nextPackaging);
       setAvailablePackaging(nextPackaging);
     }).catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Não foi possível carregar insumos e receitas-base.'));
@@ -405,7 +409,7 @@ function RecipeWizard({ recipe, close: finishClose, save }: { recipe: Product | 
   useEffect(() => {
     void costService.list().then((items) => setAvailableIngredients(items
       .filter((item) => item.type === 'ingredient')
-      .map((item) => ({ id: item.id, name: item.name, type: 'INSUMO', unit: costItemUnit(item.purchaseUnit), unitCost: normalizedComponentUnitCost(item.baseUnitCost, item.purchaseUnit) }))))
+      .map((item) => ({ id: item.id, name: item.name, type: 'INSUMO', unit: resolvedCostItemUnit(item), unitCost: normalizedComponentUnitCost(effectiveUnitCostForItem(item), effectiveUnitForItem(item) ?? item.purchaseUnit) }))))
       .catch((loadError) => setError(loadError instanceof Error ? loadError.message : 'Não foi possível carregar os ingredientes.'));
   }, []);
   function chooseIngredient(id: string) { const option = availableIngredients.find((item) => item.id === id) ?? emptyIngredient; setDraft({ ...option, quantity: draft.quantity }); setError(''); }
@@ -540,7 +544,8 @@ function ImportDrawer({ close }: { close: () => void }) {
             if (cost?.type === 'packaging') {
               product.packaging.push({ id: cost.id, name: cost.name, quantity, unitCost: effectiveUnitCostForItem(cost) });
             } else if (cost) {
-              product.components.push({ id: cost.id, name: cost.name, type: 'INSUMO', quantity, unit: costItemUnit(cost.purchaseUnit), unitCost: normalizedComponentUnitCost(effectiveUnitCostForItem(cost), cost.purchaseUnit) });
+              const resolvedUnit = effectiveUnitForItem(cost) ?? cost.purchaseUnit;
+              product.components.push({ id: cost.id, name: cost.name, type: 'INSUMO', quantity, unit: costItemUnit(resolvedUnit), unitCost: normalizedComponentUnitCost(effectiveUnitCostForItem(cost), resolvedUnit) });
             } else if (matchingRecipe) {
               const importedRecipeCost = 'type' in matchingRecipe
                 ? matchingRecipe.components.reduce((sum, item) => sum + componentCost(item.quantity, item.unit as Unit, item.unitCost), 0) / (matchingRecipe.yieldQuantity || 1)
