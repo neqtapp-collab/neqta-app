@@ -24,6 +24,9 @@ describe("avaliação unificada de precificação", () => {
     expect(result.completeness).toBe(33);
     expect(result.product.status).toBe("critical");
     expect(result.product.recommendedPrice).toBe(0);
+    expect(result.coveragePrice).toBe(0);
+    expect(result.sustainablePrice).toBe(0);
+    expect(result.missingInputs).toContain("Receita mensal estimada");
   });
 
   it("cruza custo direto, mão de obra, rateio, imposto, reserva e margem", () => {
@@ -44,6 +47,11 @@ describe("avaliação unificada de precificação", () => {
     expect(result.embeddedFees).toBe(27);
     expect(result.product.recommendedPrice).toBe(41.9);
     expect(result.product.status).toBe("critical");
+    expect(result.coveragePrice).toBe(25.9);
+    expect(result.sustainablePrice).toBe(32.9);
+    expect(result.confidence).toBe(85);
+    expect(result.confidenceLevel).toBe("alta");
+    expect(result.formulaVersion).toBe("neqta-pricing-v1");
   });
 
   it("bloqueia recomendação quando a composição usa valores simbólicos", () => {

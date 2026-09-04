@@ -13,13 +13,11 @@ import {
 } from "lucide-react";
 import { buttonClass } from "@/components/Button";
 import {
-  buildPricingCost,
   commercialRound,
   formatPercent,
   marginForChannel,
   money,
   parseBRL,
-  pricingCompleteness,
   recommendedPriceForChannel,
 } from "@/lib/financial";
 import { routes } from "@/config/routes";
@@ -574,40 +572,23 @@ function PricingDrawer({
         intensityWeight[usage.intensity],
     0,
   );
-  const costModel = buildPricingCost({
-    directCost: product.variableCost,
-    directOperationalCost: product.directOperationalCost,
-    laborMinutes: product.laborMinutes,
+  const pricingEvaluation = evaluateProductPricing(
+    product,
+    settings,
+    monthlyOverhead,
+    selectiveCosts,
     directLaborHourlyCost,
-    monthlyOverhead: monthlyOverhead + selectedUtilityMonthly,
-    estimatedMonthlyRevenue: settings.financial.estimatedMonthlyRevenue,
-    operationalReserve: settings.financial.operationalReserve,
-  });
-  const effectiveCost = costModel.unitCost;
-  const embeddedFees =
-    settings.financial.salesTax +
-    settings.financial.operationalReserve +
-    costModel.overheadRate;
-  const completeness =
-    product.pricingCompleteness ??
-    pricingCompleteness({
-      directCost: product.variableCost,
-      monthlyOverhead,
-      estimatedMonthlyRevenue: settings.financial.estimatedMonthlyRevenue,
-    });
-  const pricingReady = completeness === 100 && effectiveCost > 0;
-  const mathematical = pricingReady
-    ? recommendedPriceForChannel(effectiveCost, target, embeddedFees)
-    : 0;
-  const targetPrice = commercialRound(mathematical);
-  const recommended = pricingReady
-    ? Math.max(
-        targetPrice,
-        product.recommendedPrice > product.currentPrice
-          ? product.recommendedPrice
-          : 0,
-      )
-    : 0;
+  );
+  const effectiveCost = pricingEvaluation.effectiveCost;
+  const embeddedFees = pricingEvaluation.embeddedFees;
+  const completeness = pricingEvaluation.completeness;
+  const pricingReady =
+    completeness === 100 &&
+    effectiveCost > 0 &&
+    pricingEvaluation.recommendedPrice > 0;
+  const coveragePrice = pricingEvaluation.coveragePrice;
+  const sustainablePrice = pricingEvaluation.sustainablePrice;
+  const recommended = pricingEvaluation.recommendedPrice;
   const [price, setPrice] = useState(recommended);
   const margin = pricingReady
     ? (marginForChannel(price, effectiveCost, embeddedFees) ?? 0)
@@ -629,15 +610,6 @@ function PricingDrawer({
               (a.percentageFee + a.anticipationFee) || b.fixedFee - a.fixedFee,
         )[0]
       : activePayments[0];
-  const minimumPrice = pricingReady
-    ? commercialRound(
-        recommendedPriceForChannel(
-          effectiveCost,
-          settings.financial.minimumMargin,
-          embeddedFees,
-        ),
-      )
-    : 0;
   const channelRows = settings.channels
     .filter((channel) => channel.active)
     .map((channel) => {
@@ -692,26 +664,33 @@ function PricingDrawer({
               Custo direto<b>{money(product.variableCost)}</b>
             </span>
             <span>
-              Mão de obra direta<b>{money(costModel.laborCost)}</b>
+              Mão de obra direta<b>{money(pricingEvaluation.laborCost)}</b>
             </span>
             <span>
-              Rateio mensal<b>{formatPercent(costModel.overheadRate)}</b>
+              Rateio mensal<b>{formatPercent(pricingEvaluation.overheadRate)}</b>
             </span>
             <span>
               Completude dos dados<b>{completeness}%</b>
+            </span>
+            <span>
+              Confiança da estimativa
+              <b>
+                {pricingEvaluation.confidence}% · {pricingEvaluation.confidenceLevel}
+              </b>
             </span>
           </section>
           <section className="pricing-reference">
             <h3>Preços de referência</h3>
             <div>
               <span>
-                Preço mínimo<b>{pricingReady ? money(minimumPrice) : "—"}</b>
-                <small>Respeita a margem mínima configurada.</small>
+                Preço de cobertura
+                <b>{pricingReady ? money(coveragePrice) : "—"}</b>
+                <small>Cobre o custo direto e as taxas variáveis conhecidas.</small>
               </span>
               <span>
                 Preço sustentável
-                <b>{pricingReady ? money(targetPrice) : "—"}</b>
-                <small>Cobre custos, rateio e meta da empresa.</small>
+                <b>{pricingReady ? money(sustainablePrice) : "—"}</b>
+                <small>Cobre também o rateio mensal, ainda sem margem-alvo.</small>
               </span>
               <span className="featured">
                 Preço recomendado
@@ -731,10 +710,16 @@ function PricingDrawer({
             {completeness < 100 && (
               <div className="pricing-data-warning" role="alert">
                 <b>Revise os dados antes de usar este preço</b>
-                {(product.pricingWarnings ?? []).length > 0 ? (
+                {pricingEvaluation.warnings.length > 0 ? (
                   <ul>
-                    {product.pricingWarnings?.map((warning) => (
+                    {pricingEvaluation.warnings.map((warning) => (
                       <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : pricingEvaluation.missingInputs.length > 0 ? (
+                  <ul>
+                    {pricingEvaluation.missingInputs.map((input) => (
+                      <li key={input}>Preencha: {input}.</li>
                     ))}
                   </ul>
                 ) : (
@@ -744,17 +729,20 @@ function PricingDrawer({
                 )}
                 <Link
                   href={
-                    (product.pricingWarnings ?? []).length > 0
+                    pricingEvaluation.warnings.length > 0
                       ? routes.product(product.id)
                       : routes.settings
                   }
                 >
-                  {(product.pricingWarnings ?? []).length > 0
+                  {pricingEvaluation.warnings.length > 0
                     ? "Revisar ficha técnica"
                     : "Completar configurações"}
                 </Link>
               </div>
             )}
+            <small className="pricing-formula-version">
+              Cálculo {pricingEvaluation.formulaVersion}
+            </small>
           </section>
           {pricingReady && (
             <section className="pricing-simulator">

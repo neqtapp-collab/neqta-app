@@ -10,6 +10,15 @@ import {
 } from "@/lib/financial";
 
 const intensityWeight = { low: 0.5, medium: 1, high: 1.5 } as const;
+export const PRICING_FORMULA_VERSION = "neqta-pricing-v1";
+
+function confidenceLevel(score: number): "baixa" | "média" | "alta" {
+  return score >= 80 ? "alta" : score >= 55 ? "média" : "baixa";
+}
+
+function roundedPrice(cost: number, margin: number, fees: number) {
+  return commercialRound(recommendedPriceForChannel(cost, margin, fees));
+}
 
 export function getPricingDataWarnings(product: Product) {
   const components = product.components ?? [];
@@ -94,10 +103,54 @@ export function evaluateProductPricing(
   const completeness = suspiciousComposition
     ? Math.min(baseCompleteness, 67)
     : baseCompleteness;
-  const embeddedFees =
-    settings.financial.salesTax +
-    settings.financial.operationalReserve +
-    model.overheadRate;
+  const missingInputs: string[] = [];
+  if (product.variableCost <= 0) missingInputs.push("Custo da ficha técnica");
+  if (allocatedOverhead <= 0) missingInputs.push("Custos mensais da empresa");
+  if (settings.financial.estimatedMonthlyRevenue <= 0)
+    missingInputs.push("Receita mensal estimada");
+  if ((product.laborMinutes ?? 0) > 0 && directLaborHourlyCost <= 0)
+    missingInputs.push("Custo e horas da equipe produtiva");
+  const variableFees =
+    settings.financial.salesTax + settings.financial.operationalReserve;
+  const embeddedFees = variableFees + model.overheadRate;
+  const target = settings.financial.targetMargin || product.targetMargin || 30;
+  const pricingReady = completeness === 100 && model.unitCost > 0;
+  const coveragePrice = pricingReady
+    ? roundedPrice(model.unitCost, 0, variableFees)
+    : 0;
+  const sustainablePrice = pricingReady
+    ? roundedPrice(model.unitCost, 0, embeddedFees)
+    : 0;
+  const calculatedRecommendedPrice = pricingReady
+    ? roundedPrice(model.unitCost, target, embeddedFees)
+    : 0;
+  if (pricingReady && calculatedRecommendedPrice <= 0)
+    pricingWarnings.push(
+      "A soma das taxas, do rateio e da margem torna o cálculo inviável. Revise os percentuais.",
+    );
+  const confidence = Math.max(
+    0,
+    Math.min(
+      100,
+      100 -
+        Math.round((100 - completeness) * 0.7) -
+        (settings.financial.estimatedMonthlyRevenue > 0 ? 15 : 0) -
+        (suspiciousComposition ? 20 : 0) -
+        ((product.laborMinutes ?? 0) > 0 && directLaborHourlyCost <= 0 ? 15 : 0),
+    ),
+  );
+  const resultMetadata = {
+    coveragePrice,
+    sustainablePrice,
+    recommendedPrice: calculatedRecommendedPrice,
+    completeness,
+    confidence,
+    confidenceLevel: confidenceLevel(confidence),
+    missingInputs,
+    warnings: pricingWarnings,
+    formulaVersion: PRICING_FORMULA_VERSION,
+    calculatedAt: new Date().toISOString(),
+  };
   if (product.status === "recipe")
     return {
       product,
@@ -105,11 +158,11 @@ export function evaluateProductPricing(
       laborCost: model.laborCost,
       overheadRate: model.overheadRate,
       embeddedFees,
-      completeness,
       suspiciousComposition,
       pricingWarnings,
+      ...resultMetadata,
     };
-  if (completeness < 100 || model.unitCost <= 0)
+  if (!pricingReady || calculatedRecommendedPrice <= 0)
     return {
       product: {
         ...product,
@@ -117,36 +170,44 @@ export function evaluateProductPricing(
         recommendedPrice: 0,
         status: "critical" as ProductStatus,
         pricingCompleteness: completeness,
+        pricingConfidence: confidence,
+        pricingConfidenceLevel: confidenceLevel(confidence),
         pricingWarnings,
+        pricingMissingInputs: missingInputs,
+        coveragePrice,
+        sustainablePrice,
+        pricingFormulaVersion: PRICING_FORMULA_VERSION,
       },
       effectiveCost: model.unitCost,
       laborCost: model.laborCost,
       overheadRate: model.overheadRate,
       embeddedFees,
-      completeness,
       suspiciousComposition,
+      ...resultMetadata,
     };
-  const target = settings.financial.targetMargin || product.targetMargin || 30;
   const margin =
     marginForChannel(product.currentPrice, model.unitCost, embeddedFees) ?? 0;
-  const recommendedPrice = commercialRound(
-    recommendedPriceForChannel(model.unitCost, target, embeddedFees),
-  );
   return {
     product: {
       ...product,
       projectedMargin: margin,
-      recommendedPrice,
+      recommendedPrice: calculatedRecommendedPrice,
       status: pricingStatus(margin, target),
       pricingCompleteness: completeness,
+      pricingConfidence: confidence,
+      pricingConfidenceLevel: confidenceLevel(confidence),
       pricingWarnings,
+      pricingMissingInputs: missingInputs,
+      coveragePrice,
+      sustainablePrice,
+      pricingFormulaVersion: PRICING_FORMULA_VERSION,
     },
     effectiveCost: model.unitCost,
     laborCost: model.laborCost,
     overheadRate: model.overheadRate,
     embeddedFees,
-    completeness,
     suspiciousComposition,
+    ...resultMetadata,
   };
 }
 

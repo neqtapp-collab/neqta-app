@@ -964,7 +964,22 @@ function ProductDetails({
               Margem projetada<b>{product.projectedMargin}%</b>
             </span>
             <span>
-              Preço recomendado<b>{money(product.recommendedPrice)}</b>
+              Preço recomendado
+              <b>
+                {product.recommendedPrice > 0
+                  ? money(product.recommendedPrice)
+                  : "—"}
+              </b>
+            </span>
+            <span>
+              Completude dos dados<b>{product.pricingCompleteness ?? 0}%</b>
+            </span>
+            <span>
+              Confiança da estimativa
+              <b>
+                {product.pricingConfidence ?? 0}% ·{" "}
+                {product.pricingConfidenceLevel ?? "baixa"}
+              </b>
             </span>
           </>
         )}

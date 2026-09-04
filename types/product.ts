@@ -50,7 +50,13 @@ export interface Product {
   operationalCosts?: ProductOperationalCost[];
   utilityUsages?: ProductUtilityUsage[];
   pricingCompleteness?: number;
+  pricingConfidence?: number;
+  pricingConfidenceLevel?: 'baixa' | 'média' | 'alta';
   pricingWarnings?: string[];
+  pricingMissingInputs?: string[];
+  coveragePrice?: number;
+  sustainablePrice?: number;
+  pricingFormulaVersion?: string;
 }
 
 export interface CreateProductDTO {
